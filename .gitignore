@@ -1,0 +1,11 @@
+*.ini
+__pycache__/
+dist/
+build/
+*.exe
+Thumbs.db
+bkp/
+exe/
+settings1.png
+settings2.png
+KP_logo.ico
