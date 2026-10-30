@@ -27,6 +27,7 @@ class FakeWin32Print:
         self.max_copies = max_copies
         self.open_handles = 0
         self.jobs = []
+        self.capabilities = {printing.DC_COPIES: 99, printing.DC_COLLATE: 1}
 
     def OpenPrinter(self, name, defaults=None):
         self.open_handles += 1
@@ -37,7 +38,10 @@ class FakeWin32Print:
 
     def GetPrinter(self, handle, level):
         assert level == 2
-        return {"pDevMode": copy.copy(self.devmode)}
+        return {"pDevMode": copy.copy(self.devmode), "pPortName": "USB001"}
+
+    def DeviceCapabilities(self, device, port, capability):
+        return self.capabilities[capability]
 
     def DocumentProperties(self, hwnd, handle, name, out, inp, mode):
         assert out is inp and mode == printing.DM_IN_BUFFER | printing.DM_OUT_BUFFER
@@ -120,6 +124,17 @@ def test_place_page_small_page_not_enlarged():
     x, y, w, h, rotate = place_page((100, 150), (2480, 3508), (0, 0), (2480, 3508), (300, 300))
     assert (w, h) == (1181, 1772) and rotate == 0
     assert (x, y) == ((2480 - 1181) // 2, (3508 - 1772) // 2)
+
+
+def test_driver_copies(fake):
+    win32 = fake()
+    assert printing._driver_copies("Office", 2, collate=True)
+    assert not printing._driver_copies("Office", 150, collate=False)       # more than the driver does
+    win32.capabilities[printing.DC_COLLATE] = 0
+    assert not printing._driver_copies("Office", 2, collate=True)         # would come out 1,1,2,2
+    assert printing._driver_copies("Office", 2, collate=False)
+    del win32.capabilities[printing.DC_COPIES]
+    assert not printing._driver_copies("Office", 2, collate=False)        # unknown: print it again
 
 
 def test_wait_for_new_job(fake, monkeypatch):

@@ -48,7 +48,8 @@ DMORIENT_PORTRAIT = 1
 DMCOLLATE_TRUE = 1
 DMPAPER_USER = 256
 
-# GetDeviceCaps indexes (wingdi.h)
+# DeviceCapabilities / GetDeviceCaps indexes (wingdi.h)
+DC_COPIES, DC_COLLATE = 18, 22
 HORZRES, VERTRES = 8, 10
 LOGPIXELSX, LOGPIXELSY = 88, 90
 PHYSICALWIDTH, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY = 110, 111, 112, 113
@@ -230,12 +231,12 @@ class DirectBackend(Backend):
         devmode = job_settings(printer, paper, copies)
         if isinstance(paper, tuple) and devmode.PaperSize == DMPAPER_USER:
             devmode = _room_for_margins(printer, paper, copies, devmode)
-        jobs = 1
-        if copies > 1 and devmode.Copies < copies:   # the driver cannot make copies itself
-            jobs, devmode.Copies = copies, 1
         sizes = {p.index: (p.width_mm, p.height_mm) for p in read_document(path).pages}
         name = os.path.basename(path)
         pdf = pdfium.PdfDocument(path)
+        jobs = 1
+        if copies > 1 and not _driver_copies(printer, copies, collate=len(pdf) > 1):
+            jobs, devmode.Copies = copies, 1    # print the job again for every copy
         try:
             for _ in range(jobs):
                 hdc = win32gui.CreateDC("WINSPOOL", printer, devmode)
@@ -262,6 +263,22 @@ class DirectBackend(Backend):
         finally:
             pdf.close()
         return True   # EndDoc returns once the job is spooled
+
+
+def _driver_copies(printer: str, copies: int, collate: bool) -> bool:
+    """Whether the driver itself can print this many (collated) copies."""
+    try:
+        handle = win32print.OpenPrinter(printer)
+        try:
+            port = win32print.GetPrinter(handle, 2)["pPortName"]
+        finally:
+            win32print.ClosePrinter(handle)
+        if win32print.DeviceCapabilities(printer, port, DC_COPIES) < copies:
+            return False
+        return not collate or win32print.DeviceCapabilities(printer, port, DC_COLLATE) == 1
+    except Exception:
+        log.debug("Cannot read the capabilities of %s", printer, exc_info=True)
+        return False
 
 
 def _room_for_margins(printer: str, paper: tuple, copies: int, devmode):
