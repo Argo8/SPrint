@@ -54,10 +54,17 @@ jobs:
       - name: Printer diagnostics (temporary)
         shell: pwsh
         continue-on-error: true
+        timeout-minutes: 15
         run: |
+          choco install adobereader -y --no-progress | Select-Object -Last 3
           @'
-          import win32print
-          TEST = "Microsoft Print to PDF"
+          import ctypes, os, time, win32print
+          from pypdf import PdfWriter
+          from sprint import printing
+          from sprint.pdfdocs import read_document
+          MM = 72 / 25.4
+          OUT = os.environ["SPRINT_TEST_OUTPUT"]
+          TEST = os.environ["SPRINT_TEST_PRINTER"]
           def level9():
               h = win32print.OpenPrinter(TEST)
               try:
@@ -65,18 +72,40 @@ jobs:
                   return None if dm is None else (dm.PaperSize, dm.PaperWidth, dm.PaperLength)
               finally:
                   win32print.ClosePrinter(h)
+          class PI9(ctypes.Structure):
+              _fields_ = [("pDevMode", ctypes.c_void_p)]
           h = win32print.OpenPrinter(TEST)
-          print("level 9 at start:", level9())
           dm = win32print.GetPrinter(h, 8)["pDevMode"]
           dm.PaperSize = 8
           win32print.SetPrinter(h, 9, {"pDevMode": dm}, 0)
           print("level 9 after set:", level9())
-          try:
-              win32print.SetPrinter(h, 9, {"pDevMode": None}, 0)
-              print("level 9 after SetPrinter(None):", level9())
-          except Exception as e:
-              print("SetPrinter(None) failed:", repr(e))
+          ok = ctypes.WinDLL("winspool.drv", use_last_error=True).SetPrinterW(ctypes.c_void_p(int(h)), 9, ctypes.byref(PI9(None)), 0)
+          print("SetPrinterW(9, NULL) ->", ok, ctypes.get_last_error(), "level 9 now:", level9())
           win32print.ClosePrinter(h)
+          def make(name, w, hh):
+              wr = PdfWriter(); wr.add_blank_page(w * MM, hh * MM); wr.write(name); return os.path.abspath(name)
+          odd, a3 = make("diag_odd.pdf", 300, 430), make("diag_a3.pdf", 297, 420)
+          def measure(backend, path, paper=None):
+              if os.path.exists(OUT): os.remove(OUT)
+              t0 = time.monotonic()
+              confirmed = backend.print_file(TEST, path, 1, paper)
+              while not (os.path.exists(OUT) and os.path.getsize(OUT) > 0) and time.monotonic() - t0 < 90:
+                  time.sleep(0.5)
+              time.sleep(2)
+              d = read_document(OUT)
+              sizes = [(round(p.width_mm), round(p.height_mm)) for p in d.pages] if d.ok else d.error
+              return sizes, "confirmed" if confirmed else "unconfirmed", round(time.monotonic() - t0, 1)
+          s = printing.SumatraBackend(printing.find_sumatra())
+          print("sumatra odd paper=297mm x 420mm ->", measure(s, odd, "297mm x 420mm"))
+          adobe = printing.find_adobe()
+          print("adobe:", adobe)
+          if adobe:
+              a = printing.AdobeBackend(adobe)
+              print("adobe odd, default ->", measure(a, odd))
+              with printing.PlotterPaper(TEST) as p:
+                  p.apply(297, 420)
+                  print("adobe odd, per-user A3 ->", measure(a, odd))
+              print("adobe a3, default ->", measure(a, a3))
           '@ | python -
 
       - name: Run tests

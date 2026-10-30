@@ -63,14 +63,17 @@ def _read_all(ctx: JobContext, paths: list[str]):
     return docs
 
 
-def _send(ctx: JobContext, printer: str, doc, path: str, copies: int, paper=None) -> bool:
-    """Print one file; logs problems and returns whether it was sent."""
+def _send(ctx: JobContext, printer: str, doc, path: str, copies: int, pages: int,
+          paper=None, report=True) -> bool:
+    """Print one file and log the outcome; returns whether it was sent."""
     ctx.check_cancel()
     try:
         confirmed = ctx.backend.print_file(printer, path, copies, paper)
     except Exception as exc:
         ctx.log(t("send_error", name=doc.name, error=exc), "error")
         return False
+    if report:
+        ctx.log(t("print_sent", name=doc.name, pages=count(pages, "page")))
     if not confirmed:
         ctx.log(t("unconfirmed"), "warn")
     return True
@@ -96,8 +99,7 @@ def print_size(ctx: JobContext, kind: str, printer: str, copies: int, paths: lis
             except Exception as exc:
                 ctx.log(t("send_error", name=doc.name, error=exc), "error")
                 continue
-            if _send(ctx, printer, doc, path, copies, paper=kind):
-                ctx.log(t("print_sent", name=doc.name, pages=count(len(indices), "page")))
+            if _send(ctx, printer, doc, path, copies, len(indices), paper=kind):
                 sent += len(indices)
     except Cancelled:
         ctx.log(t("cancelled"), "warn")
@@ -163,8 +165,8 @@ def plot(ctx: JobContext, key: str, printer: str, copies: int, paths: list[str])
 
             for copy_no in range(copies):
                 for doc, indices, path in files:
-                    if _send(ctx, printer, doc, path, 1) and copy_no == 0:
-                        ctx.log(t("print_sent", name=doc.name, pages=count(len(indices), "page")))
+                    first = copy_no == 0
+                    if _send(ctx, printer, doc, path, 1, len(indices), report=first) and first:
                         sent += len(indices)
     except Cancelled:
         ctx.log(t("cancelled"), "warn")

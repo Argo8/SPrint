@@ -39,7 +39,8 @@ sets the plotter's paper size to *roll width × page length*; afterwards your pr
 
 SPrint hands the PDF files to a PDF program, using the first one it finds:
 
-1. **[SumatraPDF](https://www.sumatrapdfreader.org/)** (free, recommended) — prints silently, reports errors, supports copies.
+1. **[SumatraPDF](https://www.sumatrapdfreader.org/)** (free, recommended) — prints silently, reports errors, supports copies
+   and picks the printer's matching paper size (e.g. *ISO A1* on a plotter) by itself; for other sizes SPrint's paper setting applies.
    Install it, or put `SumatraPDF.exe` (the portable version works too) next to `SPrint.exe`.
 2. **Adobe Acrobat / Acrobat Reader** — leaves Reader open in the background; SPrint watches the print queue to pace jobs.
 3. The default PDF app via Windows "print to" (not every PDF app supports it; Microsoft Edge does not).
@@ -159,7 +160,8 @@ postavi veličinu papira na ploteru na *širina role × dužina stranice*; nakon
 
 SPrint PDF datoteke predaje PDF programu, prvom koji pronađe:
 
-1. **[SumatraPDF](https://www.sumatrapdfreader.org/)** (besplatan, preporučeno) — ispisuje tiho, javlja greške, podržava kopije.
+1. **[SumatraPDF](https://www.sumatrapdfreader.org/)** (besplatan, preporučeno) — ispisuje tiho, javlja greške, podržava kopije
+   i sam odabire odgovarajući format papira na printeru (npr. *ISO A1* na ploteru); za ostale veličine vrijedi postavka papira iz SPrinta.
    Instalirajte ga ili stavite `SumatraPDF.exe` (radi i prijenosna verzija) pokraj `SPrint.exe`.
 2. **Adobe Acrobat / Acrobat Reader** — Reader ostaje otvoren u pozadini; SPrint prati red ispisa da ne zagušuje printer.
 3. Zadana PDF aplikacija preko Windows naredbe "print to" (ne podržava je svaka aplikacija; Microsoft Edge ne).

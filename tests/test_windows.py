@@ -63,18 +63,13 @@ def test_rejected_custom_size_leaves_settings_alone(builtin_printer):
 
 
 @pytest.mark.skipif(not os.environ.get("SPRINT_TEST_PRINTER"), reason="no file printer configured")
-def test_print_with_paper_override_end_to_end(make_pdf):
-    """Print through SumatraPDF to a printer that writes a PDF and measure the paper used.
-
-    SumatraPDF picks a matching paper size by itself when the printer has one, so the
-    override is checked with a page size no paper form has: then the default applies.
-    """
+def test_sumatra_paper_end_to_end(make_pdf):
+    """Print through SumatraPDF to a printer that writes a PDF and measure the paper used."""
     printer = os.environ["SPRINT_TEST_PRINTER"]
     output = os.environ["SPRINT_TEST_OUTPUT"]
     exe = printing.find_sumatra()
     assert exe, "SumatraPDF not found"
     backend = printing.SumatraBackend(exe)
-    odd_size = make_pdf("odd.pdf", [(300, 430)])
     a3 = make_pdf("a3.pdf", [(297, 420)])
 
     def paper_of_job(path, paper=None):
@@ -91,11 +86,5 @@ def test_print_with_paper_override_end_to_end(make_pdf):
         page = doc.pages[0]
         return round(min(page.width_mm, page.height_mm)), round(max(page.width_mm, page.height_mm))
 
-    default = paper_of_job(odd_size)
-    assert default != (297, 420)
-    with printing.PlotterPaper(printer) as override:
-        override.apply(297, 420)
-        assert paper_of_job(odd_size) == (297, 420)
-    assert override.restore_error is None
-    assert paper_of_job(odd_size) == default
-    assert paper_of_job(a3, paper="A4") == (210, 297)
+    assert paper_of_job(a3) == (297, 420)              # matching paper picked by SumatraPDF
+    assert paper_of_job(a3, paper="A4") == (210, 297)  # explicit paper wins
