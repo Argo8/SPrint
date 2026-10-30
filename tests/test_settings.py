@@ -8,7 +8,7 @@ def test_round_trip_with_awkward_names(tmp_path):
     path = str(tmp_path / "sub" / "settings.ini")
     original = Settings(printer_a4="Pisač 100% A4", printer_a3="\\\\server\\Kopirka A3",
                         printer_plotter="HP DesignJet T830", language="hr", roll=914,
-                        a3_to_plotter=True, theme="dark", clear_when_done=True)
+                        a3_to_plotter=True, clear_when_done=True)
     original.save(path)
     assert Settings.load(path) == original
 

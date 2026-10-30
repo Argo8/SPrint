@@ -54,9 +54,9 @@ def window(qtbot, tmp_path, services, monkeypatch):
     app = QApplication.instance()
     if not hasattr(app, "focus_visible"):
         app.focus_visible = FocusVisible(app)
-    theme.apply(app, "light", str(tmp_path / "ui"))
+    theme.apply(app, str(tmp_path / "ui"))
     controller = Controller(settings, services, str(tmp_path))
-    win = MainWindow(controller, str(tmp_path / "ui"))
+    win = MainWindow(controller)
     win.resize(1280, 860)
     qtbot.addWidget(win)
     win.show()
@@ -184,17 +184,15 @@ def test_copies_and_duplex(qtbot, window, project, services):
     assert services.backend.calls == [("HP LaserJet Pro M404", "bill.pdf", 2, "A4", True)]
 
 
-def test_settings_drawer_theme_and_language(qtbot, window):
+def test_settings_drawer_and_language(qtbot, window):
     qtbot.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
     assert window.drawer.is_open
-    window.theme_choice._clicked(2)
-    assert theme.colors().dark and window.c.settings.theme == "dark"
     window.language_choice._clicked(0)
     assert window.files_title.text() == "Datoteke"
     assert window.print_button.sub == "Dodaj PDF datoteke"
+    assert window.c.settings.language == "hr"
     window.drawer.close_drawer()
     assert not window.drawer.is_open
-    window.set_theme("light")
     window.set_language("en")
 
 

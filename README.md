@@ -20,7 +20,7 @@ Uninstalling: *Settings → Apps → SPrint*.
 Windows may warn that the installer comes from an unknown publisher (it is not code-signed):
 click *More info* → *Run anyway*.
 
-There is also a **`SPrint-portable-<version>.zip`**: unpack it anywhere (e.g. a USB stick) and run `SPrint.exe`.
+There is also a **`SPrint-portable-<version>.zip`**: unpack it into a new folder anywhere (e.g. a USB stick) and run `SPrint.exe`; for a newer version delete the old folder first.
 
 ## How it works
 
@@ -61,7 +61,7 @@ own settings are never changed. SPrint remembers which roll is in the plotter.
 - Landscape pages are turned to fit the paper; pages larger than the printable area are shrunk, smaller ones are not enlarged
 - Only the needed pages of a file are printed; CAD layer visibility is kept
 - Printing runs in the background; the window shows progress per printer
-- Light and dark theme (or like Windows), English / Croatian interface
+- English / Croatian interface
 - Keyboard: *Ctrl+O* adds files, *Ctrl+P* prints, *Esc* closes the settings
 - Log for troubleshooting (*Settings → Log*)
 
@@ -141,7 +141,7 @@ the printer tests run only on Windows.
 
 | Location | Content |
 |---|---|
-| `%APPDATA%\SPrint\settings.ini` | printers, the roll in the plotter, A3 on the plotter, language, theme, optional print program (older `printer_choices.ini` is imported once) |
+| `%APPDATA%\SPrint\settings.ini` | printers, the roll in the plotter, A3 on the plotter, language, optional print program (older `printer_choices.ini` is imported once) |
 | `%APPDATA%\SPrint\sprint.log` | log for troubleshooting |
 | `%TEMP%\SPrint_*` | temporary PDFs with extracted pages, deleted on exit |
 
@@ -197,7 +197,7 @@ Deinstalacija: *Postavke → Aplikacije → SPrint*.
 Windows može upozoriti da je instalacija od nepoznatog izdavača (nije digitalno potpisana):
 kliknite *Više informacija* → *Svejedno pokreni*.
 
-Postoji i **`SPrint-portable-<verzija>.zip`**: raspakirajte ga bilo gdje (npr. na USB stick) i pokrenite `SPrint.exe`.
+Postoji i **`SPrint-portable-<verzija>.zip`**: raspakirajte ga u novu mapu bilo gdje (npr. na USB stick) i pokrenite `SPrint.exe`; za noviju verziju prvo obrišite staru mapu.
 
 ## Kako radi
 
@@ -238,7 +238,7 @@ putuje sa svakim poslom ispisa, pa se postavke samog plotera nikad ne mijenjaju.
 - Položene stranice okreću se prema papiru; stranice veće od područja ispisa se smanjuju, manje se ne povećavaju
 - Ispisuju se samo potrebne stranice datoteke; vidljivost CAD slojeva ostaje očuvana
 - Ispis radi u pozadini; prozor pokazuje napredak za svaki pisač
-- Svijetla i tamna tema (ili kao Windows), sučelje na hrvatskom / engleskom
+- Sučelje na hrvatskom / engleskom
 - Tipkovnica: *Ctrl+O* dodaje datoteke, *Ctrl+P* ispisuje, *Esc* zatvara postavke
 - Dnevnik za otklanjanje problema (*Postavke → Dnevnik*)
 
@@ -318,7 +318,7 @@ testovi pisača samo na Windowsima.
 
 | Lokacija | Sadržaj |
 |---|---|
-| `%APPDATA%\SPrint\settings.ini` | pisači, rola u ploteru, A3 na ploter, jezik, tema, po želji program za ispis (stari `printer_choices.ini` uvozi se jednom) |
+| `%APPDATA%\SPrint\settings.ini` | pisači, rola u ploteru, A3 na ploter, jezik, po želji program za ispis (stari `printer_choices.ini` uvozi se jednom) |
 | `%APPDATA%\SPrint\sprint.log` | zapis za otklanjanje problema |
 | `%TEMP%\SPrint_*` | privremeni PDF-ovi s izdvojenim stranicama, brišu se pri zatvaranju |
 

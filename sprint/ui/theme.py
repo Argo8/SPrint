@@ -1,7 +1,7 @@
-"""Colours, fonts and the style sheet, for the light and the dark theme.
+"""Colours, fonts and the style sheet.
 
-Custom-painted widgets read ``colors()`` when they paint, so switching the
-theme only needs a new style sheet and a repaint.
+SPrint is always light, also when Windows uses dark mode. Custom-painted
+widgets read ``colors()`` when they paint.
 """
 
 from __future__ import annotations
@@ -13,8 +13,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QGuiApplication
 
 from . import icons
-
-LIGHT, DARK = "light", "dark"
 
 
 @dataclass(frozen=True)
@@ -41,7 +39,6 @@ class Colors:
     switch_off: str
     toast_bg: str
     toast_text: str
-    dark: bool
 
     def soft(self, color: str, amount: float = 0.10) -> str:
         """``color`` faintly over the card background (pills, highlights)."""
@@ -53,16 +50,7 @@ _LIGHT = Colors(
     text="#151922", muted="#586172", accent="#2563EB", accent_hover="#1D4FD7", accent_text="#1D4ED8",
     a4="#2563EB", a4_text="#1D4ED8", a3="#0D9488", a3_text="#0F766E",
     plot="#EA580C", plot_text="#C2410C", plot_strong="#C2410C", ok="#166534", danger="#B42318",
-    switch_off="#C7CED8", toast_bg="#151922", toast_text="#F7F8FA", dark=False)
-
-_DARK = Colors(
-    bg="#0D1015", surface="#151920", surface2="#1B2029", border="#262D38", border_strong="#3A4452",
-    text="#E8EBF1", muted="#A2ABB9", accent="#3366F0", accent_hover="#4675F3", accent_text="#93AFFF",
-    a4="#6E97FF", a4_text="#A8C0FF", a3="#2CC7B3", a3_text="#6EE7D6",
-    plot="#FB923C", plot_text="#FDBA74", plot_strong="#C2410C", ok="#4ADE80", danger="#F97066",
-    switch_off="#3A4452", toast_bg="#EEF1F5", toast_text="#151922", dark=True)
-
-_current = _LIGHT
+    switch_off="#C7CED8", toast_bg="#151922", toast_text="#F7F8FA")
 
 
 def mix(base: str, top: str, amount: float) -> str:
@@ -74,32 +62,16 @@ def mix(base: str, top: str, amount: float) -> str:
 
 
 def colors() -> Colors:
-    return _current
+    return _LIGHT
 
 
-def system_is_dark() -> bool:
+def apply(app, asset_dir: str) -> None:
+    """Style the application; Windows dark mode does not change it."""
     hints = QGuiApplication.styleHints()
-    return hasattr(hints, "colorScheme") and hints.colorScheme() == Qt.ColorScheme.Dark
-
-
-def resolve(mode: str) -> str:
-    """'light' or 'dark' for a setting of '', 'light' or 'dark' ('' = like Windows)."""
-    if mode in (LIGHT, DARK):
-        return mode
-    return DARK if system_is_dark() else LIGHT
-
-
-def apply(app, mode: str, asset_dir: str) -> str:
-    """Switch the application to the light or dark theme; returns which one."""
-    global _current
-    name = resolve(mode)
-    _current = _DARK if name == DARK else _LIGHT
-    hints = QGuiApplication.styleHints()
-    if hasattr(hints, "setColorScheme"):   # Qt 6.8+: also the window frame
-        scheme = {LIGHT: Qt.ColorScheme.Light, DARK: Qt.ColorScheme.Dark}.get(mode, Qt.ColorScheme.Unknown)
-        hints.setColorScheme(scheme)
-    app.setStyleSheet(style_sheet(_current, asset_dir))
-    return name
+    if hasattr(hints, "setColorScheme"):   # Qt 6.8+: also the window frame and dialogs
+        hints.setColorScheme(Qt.ColorScheme.Light)
+    app.setPalette(app.style().standardPalette())
+    app.setStyleSheet(style_sheet(_LIGHT, asset_dir))
 
 
 def font(size: float = 10, weight=None) -> QFont:

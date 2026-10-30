@@ -33,8 +33,6 @@ _TEXTS = {
     "en": {
         # header
         "settings":          "Settings",
-        "theme_to_dark":     "Dark theme",
-        "theme_to_light":    "Light theme",
         # files
         "files_title":       "Files",
         "files_none":        "No files yet",
@@ -147,11 +145,6 @@ _TEXTS = {
         "detect":            "Find printers automatically",
         "win_prefs":         "Windows printer settings",
         "win_prefs_hint":    "Paper trays, quality and other options of the printer driver",
-        "sec_look":          "Appearance",
-        "theme":             "Theme",
-        "theme_system":      "Like Windows",
-        "theme_light":       "Light",
-        "theme_dark":        "Dark",
         "language":          "Language",
         "sec_log":           "Log",
         "open_log_folder":   "Open the log folder",
@@ -186,8 +179,6 @@ _TEXTS = {
     "hr": {
         # header
         "settings":          "Postavke",
-        "theme_to_dark":     "Tamna tema",
-        "theme_to_light":    "Svijetla tema",
         # files
         "files_title":       "Datoteke",
         "files_none":        "Još nema datoteka",
@@ -300,11 +291,6 @@ _TEXTS = {
         "detect":            "Prepoznaj pisače automatski",
         "win_prefs":         "Windows postavke pisača",
         "win_prefs_hint":    "Ladice, kvaliteta i ostale postavke upravljačkog programa",
-        "sec_look":          "Izgled",
-        "theme":             "Tema",
-        "theme_system":      "Kao Windows",
-        "theme_light":       "Svijetla",
-        "theme_dark":        "Tamna",
         "language":          "Jezik",
         "sec_log":           "Dnevnik",
         "open_log_folder":   "Otvori mapu dnevnika",

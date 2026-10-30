@@ -41,7 +41,6 @@ class Settings:
     roll: int = 610               # the roll in the plotter, remembered between sessions
     a3_to_plotter: bool = False   # A3 pages on the plotter's 297 mm roll
     language: str = ""            # "" until the user picks one
-    theme: str = ""               # "" = like Windows, "light" or "dark"
     print_program: str = ""       # "" = direct; "sumatra" or "adobe" for A4/A3 pages
     clear_when_done: bool = False  # empty the list once everything is printed
 
@@ -52,7 +51,6 @@ class Settings:
         "roll": ("plotter", "roll"),
         "a3_to_plotter": ("plotter", "a3"),
         "language": ("ui", "language"),
-        "theme": ("ui", "theme"),
         "print_program": ("printing", "program"),
         "clear_when_done": ("printing", "clear_when_done"),
     }

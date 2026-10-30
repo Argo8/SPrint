@@ -10,24 +10,24 @@ import os
 from html import escape
 from typing import Optional
 
-from PySide6.QtCore import QPropertyAnimation, QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation
 from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QPainter, QShortcut
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QFileDialog, QFrame,
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QFrame,
                                QGraphicsOpacityEffect, QGridLayout, QLabel, QMainWindow, QMessageBox,
-                               QPlainTextEdit, QScrollArea, QStackedWidget, QWidget)
+                               QPlainTextEdit, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, AUTHOR, __version__
 from ..i18n import count, get_language, join_and, meters, set_language, t
 from ..paper import A3, A4, ROLL_WIDTHS_MM
 from ..plan import A3_DEST, A4_DEST, PLOT_DEST, Entry
 from ..settings import data_dir
-from . import icons, theme
+from . import icons
 from .controller import Controller
 from .theme import colors, font
 from .widgets import (EASE, Collapsible, DropOverlay, Drawer, ElidedLabel, FlowLayout, HoverButton,
                       PageShape, PageTile, PrintButton, ProgressBar, RollChip, Segmented, Spinner,
                       Switch, Toast, ToggleChip, button, card, fade_in, hbox, icon_button,
-                      label, refresh_icons, set_icon, set_prop, vbox)
+                      label, set_icon, set_prop, vbox)
 
 RIGHT_WIDTH = 410
 
@@ -376,10 +376,9 @@ class DestCard(QFrame):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, controller: Controller, asset_dir: str):
+    def __init__(self, controller: Controller):
         super().__init__()
         self.c = controller
-        self.asset_dir = asset_dir
         self.rows: dict[int, FileRow] = {}
         self._close_pending = False
         self.setWindowTitle(APP_NAME)
@@ -439,11 +438,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(name)
         layout.addWidget(version)
         layout.addStretch(1)
-        self.theme_button = icon_button("moon")
-        self.theme_button.clicked.connect(self._toggle_theme)
         self.settings_button = button("", "ghost", "sliders")
         self.settings_button.clicked.connect(self.open_settings)
-        layout.addWidget(self.theme_button)
         layout.addWidget(self.settings_button)
         return header
 
@@ -703,7 +699,7 @@ class MainWindow(QMainWindow):
         content = QWidget()
         layout = vbox(content, (22, 0, 22, 22), 22)
 
-        def section(title_attr: str) -> tuple:
+        def section(title_attr: str) -> QVBoxLayout:
             box = vbox(spacing=10)
             title = label(size=8.5, bold=True)
             title.setProperty("section", True)
@@ -743,15 +739,10 @@ class MainWindow(QMainWindow):
         prefs.addStretch(1)
         printers_box.addLayout(prefs)
 
-        look_box = section("sec_look_title")
-        self.theme_caption = label(muted=True, size=9, bold=True)
-        self.theme_choice = Segmented(["", "", ""])
-        self.theme_choice.picked.connect(lambda i: self.set_theme(("", theme.LIGHT, theme.DARK)[i]))
-        self.language_caption = label(muted=True, size=9, bold=True)
+        language_box = section("sec_language_title")
         self.language_choice = Segmented(["Hrvatski", "English"])
         self.language_choice.picked.connect(lambda i: self.set_language(("hr", "en")[i]))
-        for widget in (self.theme_caption, self.theme_choice, self.language_caption, self.language_choice):
-            look_box.addWidget(widget, 0, Qt.AlignmentFlag.AlignLeft)
+        language_box.addWidget(self.language_choice, 0, Qt.AlignmentFlag.AlignLeft)
 
         log_box = section("sec_log_title")
         self.log_view = QPlainTextEdit()
@@ -771,8 +762,6 @@ class MainWindow(QMainWindow):
     # ── Texts ────────────────────────────────────────────────────────────────
 
     def retranslate(self) -> None:
-        self.theme_button.setToolTip(t("theme_to_light" if colors().dark else "theme_to_dark"))
-        self.theme_button.setAccessibleName(self.theme_button.toolTip())
         self.settings_button.setText(t("settings"))
         self.files_title.setText(t("files_title"))
         self.add_button.setText(t("add_pdf"))
@@ -820,10 +809,7 @@ class MainWindow(QMainWindow):
         self.prefs_hint.setText(t("win_prefs_hint"))
         for dest, key in ((A4_DEST, "A4"), (A3_DEST, "A3"), (PLOT_DEST, "plot_title")):
             self.pref_buttons[dest].setText(t(key) if key == "plot_title" else key)
-        self.sec_look_title.setText(t("sec_look").upper())
-        self.theme_caption.setText(t("theme"))
-        self.theme_choice.set_labels([t("theme_system"), t("theme_light"), t("theme_dark")])
-        self.language_caption.setText(t("language"))
+        self.sec_language_title.setText(t("language").upper())
         self.sec_log_title.setText(t("sec_log").upper())
         self.log_folder.setText(t("open_log_folder"))
         self.about.setText(t("about", version=__version__, author=AUTHOR))
@@ -1013,7 +999,6 @@ class MainWindow(QMainWindow):
             self.total_bar.set_value(0, animate=False)
 
         self.clear_done.setChecked(c.settings.clear_when_done)
-        self.theme_choice.set_index({"": 0, theme.LIGHT: 1, theme.DARK: 2}.get(c.settings.theme, 0))
         self.language_choice.set_index(0 if get_language() == "hr" else 1)
         if self._close_pending and not busy:
             QTimer.singleShot(0, self, self.close)
@@ -1106,38 +1091,6 @@ class MainWindow(QMainWindow):
     def open_settings(self) -> None:
         self.drawer.open_drawer()
         self.toast.raise_()   # a message still showing stays readable above the drawer
-
-    def _toggle_theme(self) -> None:
-        self.set_theme(theme.LIGHT if colors().dark else theme.DARK)
-
-    def set_theme(self, mode: str) -> None:
-        """Switch theme with a short cross-fade."""
-        self.c.settings.theme = mode
-        self.c._save()
-        root = self.centralWidget()
-        snapshot = QLabel(root)
-        snapshot.setPixmap(root.grab())
-        snapshot.setGeometry(root.rect())
-        snapshot.show()
-        snapshot.raise_()
-        self.apply_theme()
-        effect = QGraphicsOpacityEffect(snapshot)
-        snapshot.setGraphicsEffect(effect)
-        anim = QPropertyAnimation(effect, b"opacity", snapshot)
-        anim.setDuration(280)
-        anim.setStartValue(1.0)
-        anim.setEndValue(0.0)
-        anim.finished.connect(snapshot.deleteLater)
-        anim.start()
-
-    def apply_theme(self) -> None:
-        theme.apply(QApplication.instance(), self.c.settings.theme, self.asset_dir)
-        set_icon(self.theme_button, "sun" if colors().dark else "moon")
-        refresh_icons(self)
-        self.retranslate()
-        self.refresh()
-        for widget in self.findChildren(QWidget):
-            widget.update()
 
     def set_language(self, lang: str) -> None:
         set_language(lang)

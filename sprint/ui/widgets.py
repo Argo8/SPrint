@@ -58,27 +58,13 @@ def blend(a: str, b: str, amount: float) -> QColor:
 
 
 def set_icon(widget, name: str, role: str = "muted", size: int = 18) -> None:
-    """Give a button or label a line icon in a theme colour; ``refresh_icons`` redraws it."""
-    widget.setProperty("icon_name", name)
-    widget.setProperty("icon_role", role)
-    widget.setProperty("icon_size", size)
-    _apply_icon(widget)
-
-
-def _apply_icon(widget) -> None:
-    name, role, size = (widget.property(k) for k in ("icon_name", "icon_role", "icon_size"))
+    """Give a button or label a line icon in one of the theme colours."""
     tint = "#FFFFFF" if role == "white" else getattr(colors(), role)
     if isinstance(widget, QLabel):
         widget.setPixmap(icons.pixmap(name, tint, size))
     else:
         widget.setIcon(icons.icon(name, tint, size))
         widget.setIconSize(QSize(size, size))
-
-
-def refresh_icons(root: QWidget) -> None:
-    for widget in root.findChildren(QWidget):
-        if widget.property("icon_name"):
-            _apply_icon(widget)
 
 
 def icon_button(name: str, tooltip: str = "", size: int = 40, icon_size: int = 18,
@@ -351,7 +337,7 @@ class ProgressBar(QWidget):
         rect = QRectF(self.rect())
         radius = rect.height() / 2
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(c.surface2 if not c.dark else c.border))
+        p.setBrush(QColor(c.surface2))
         p.drawRoundedRect(rect, radius, radius)
         if self._value > 0:
             fill = QRectF(rect.left(), rect.top(), max(rect.height(), rect.width() * self._value), rect.height())
@@ -537,7 +523,7 @@ class _SegmentHighlight(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(.5, .5, -.5, -.5)
         p.setPen(QPen(QColor(c.border), 1))
-        p.setBrush(QColor(c.surface if not c.dark else c.border))
+        p.setBrush(QColor(c.surface))
         p.drawRoundedRect(rect, 8, 8)
 
 
@@ -738,20 +724,17 @@ class PrintButton(HoverButton):
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         enabled = self.isEnabled()
         fill = (blend(c.accent, c.accent_hover, self.hover.value) if enabled
-                else blend(c.surface, c.accent, .28 if c.dark else .42))
+                else blend(c.surface, c.accent, .42))
         if self.isDown():
             fill = fill.darker(108)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(fill)
         p.drawRoundedRect(rect, 14, 14)
-        dim = not enabled and c.dark   # full white on the muted fill would still look clickable
-        ink = color("#FFFFFF", .6 if dim else 1)
+        ink = QColor("#FFFFFF")
         box = QRectF(rect.left() + 14, rect.center().y() - 20, 40, 40)
-        p.setBrush(color("#FFFFFF", .1 if dim else .16))
+        p.setBrush(color("#FFFFFF", .16))
         p.drawRoundedRect(box, 12, 12)
-        p.setOpacity(.6 if dim else 1)
         p.drawPixmap(box.adjusted(10, 10, -10, -10).toRect(), icons.pixmap("printer", "#FFFFFF", 20))
-        p.setOpacity(1)
         right = rect.right() - 14
         if enabled and self.shortcut_text and rect.width() > 330:
             p.setFont(font(8.5, True))
@@ -771,7 +754,7 @@ class PrintButton(HoverButton):
                    metrics.elidedText(self.title, Qt.TextElideMode.ElideRight, int(text.width())))
         p.setFont(font(9))
         metrics = QFontMetrics(p.font())
-        p.setPen(color("#FFFFFF", .55 if dim else .9))
+        p.setPen(color("#FFFFFF", .9))
         p.drawText(QRectF(text.left(), rect.center().y() + 1, text.width(), 20),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    metrics.elidedText(self.sub, Qt.TextElideMode.ElideRight, int(text.width())))
@@ -895,7 +878,7 @@ class _Scrim(QWidget):
 
     def paintEvent(self, _event):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(0, 0, 0, round((140 if colors().dark else 75) * self.amount)))
+        p.fillRect(self.rect(), QColor(0, 0, 0, round(75 * self.amount)))
 
     def mousePressEvent(self, event):
         self.clicked.emit()
