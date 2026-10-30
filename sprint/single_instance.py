@@ -34,6 +34,9 @@ class SingleInstance:
                 pass
         socket.write(json.dumps([os.path.abspath(p) for p in paths]).encode("utf-8") + b"\n")
         socket.waitForBytesWritten(TIMEOUT_MS)
+        # The window closes the connection once it has the paths; leaving earlier could lose them.
+        if socket.state() == QLocalSocket.LocalSocketState.ConnectedState:
+            socket.waitForDisconnected(TIMEOUT_MS)
         socket.disconnectFromServer()
         return True
 
@@ -48,19 +51,28 @@ class SingleInstance:
         self.server.newConnection.connect(lambda: self._accept(on_paths))
 
     def _accept(self, on_paths: Callable[[list[str]], None]) -> None:
-        socket = self.server.nextPendingConnection()
-        if socket is None:
-            return
+        while self.server.hasPendingConnections():
+            self._serve(self.server.nextPendingConnection(), on_paths)
+
+    def _serve(self, socket: QLocalSocket, on_paths: Callable[[list[str]], None]) -> None:
         buffer = bytearray()
+        handled = []
 
         def read():
+            if handled:
+                return
             buffer.extend(bytes(socket.readAll()))
-            if buffer.endswith(b"\n"):
-                try:
-                    paths = json.loads(buffer.decode("utf-8"))
-                except ValueError:
-                    paths = []
-                on_paths([p for p in paths if isinstance(p, str)])
+            if not buffer.endswith(b"\n"):
+                return
+            handled.append(True)
+            try:
+                paths = json.loads(buffer.decode("utf-8"))
+            except ValueError:
+                paths = []
+            on_paths([p for p in paths if isinstance(p, str)])
+            socket.disconnectFromServer()
 
         socket.readyRead.connect(read)
+        socket.disconnected.connect(read)            # the data can arrive together with the goodbye
         socket.disconnected.connect(socket.deleteLater)
+        read()                                       # or before we started listening for it
