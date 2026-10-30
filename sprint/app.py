@@ -286,7 +286,6 @@ class SPrintApp:
         self.log_text.configure(yscrollcommand=_auto_scrollbar(vsb))
         for level, color in LEVEL_COLORS.items():
             self.log_text.tag_configure(level, foreground=color)
-        self.log_text.tag_configure("summary", lmargin1=0)
 
     def _build_footer(self, outer) -> None:
         footer = tk.Frame(outer, bg=PAGE_BG)

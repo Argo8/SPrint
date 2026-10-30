@@ -64,22 +64,23 @@ def test_rejected_custom_size_leaves_settings_alone(builtin_printer):
 
 @pytest.mark.skipif(not os.environ.get("SPRINT_TEST_PRINTER"), reason="no file printer configured")
 def test_print_with_paper_override_end_to_end(make_pdf):
+    """Print through SumatraPDF to a printer that writes a PDF and measure the paper used.
+
+    SumatraPDF picks a matching paper size by itself when the printer has one, so the
+    override is checked with a page size no paper form has: then the default applies.
+    """
     printer = os.environ["SPRINT_TEST_PRINTER"]
     output = os.environ["SPRINT_TEST_OUTPUT"]
     exe = printing.find_sumatra()
     assert exe, "SumatraPDF not found"
     backend = printing.SumatraBackend(exe)
-    source = make_pdf("a3.pdf", [(297, 420)])
+    odd_size = make_pdf("odd.pdf", [(300, 430)])
+    a3 = make_pdf("a3.pdf", [(297, 420)])
 
-    def print_and_measure(paper=None, **paper_size):
+    def paper_of_job(path, paper=None):
         if os.path.exists(output):
             os.remove(output)
-        if paper_size:
-            with printing.PlotterPaper(printer) as override:
-                override.apply(**paper_size)
-                assert backend.print_file(printer, source)
-        else:
-            assert backend.print_file(printer, source, paper=paper)
+        assert backend.print_file(printer, path, paper=paper)
         deadline = time.monotonic() + 60
         while not (os.path.exists(output) and os.path.getsize(output) > 0):
             assert time.monotonic() < deadline, "no output from the printer"
@@ -90,6 +91,11 @@ def test_print_with_paper_override_end_to_end(make_pdf):
         page = doc.pages[0]
         return round(min(page.width_mm, page.height_mm)), round(max(page.width_mm, page.height_mm))
 
-    assert print_and_measure(width_mm=297, length_mm=420) == (297, 420)
-    assert print_and_measure() != (297, 420)   # default paper again once restored
-    assert print_and_measure(paper="A3") == (297, 420)   # SumatraPDF's own paper choice
+    default = paper_of_job(odd_size)
+    assert default != (297, 420)
+    with printing.PlotterPaper(printer) as override:
+        override.apply(297, 420)
+        assert paper_of_job(odd_size) == (297, 420)
+    assert override.restore_error is None
+    assert paper_of_job(odd_size) == default
+    assert paper_of_job(a3, paper="A4") == (210, 297)
