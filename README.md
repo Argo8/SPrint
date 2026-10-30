@@ -106,8 +106,9 @@ which writes `dist\SPrint-Setup-2.0.0.exe`. For Croatian installer texts put Inn
 [`Croatian.isl`](https://jrsoftware.org/files/istrans/) into `installer\` first.
 
 GitHub Actions does all of this on every push: it runs the tests on Windows, builds the installer, installs it,
-starts SPrint, uninstalls it and keeps the installer and the portable zip as artifacts. Pushing a tag such as
-`v2.0.0` publishes them as a release.
+starts SPrint, uninstalls it and keeps the installer and the portable zip as artifacts. To publish a release,
+raise `__version__` in `sprint/__init__.py` and push a matching tag such as `v2.0.0` (the build stops if they
+differ).
 
 ### Tests
 
@@ -262,8 +263,9 @@ iscc /DAppVersion=2.0.0 installer\SPrint.iss
 [`Croatian.isl`](https://jrsoftware.org/files/istrans/) iz Inno Setupa u `installer\`.
 
 GitHub Actions sve to radi pri svakom pushu: pokreće testove na Windowsima, izrađuje instalaciju, instalira je,
-pokreće SPrint, deinstalira ga i čuva instalaciju i prijenosni zip kao artefakte. Push taga poput `v2.0.0`
-objavljuje ih kao release.
+pokreće SPrint, deinstalira ga i čuva instalaciju i prijenosni zip kao artefakte. Za objavu nove verzije
+povećajte `__version__` u `sprint/__init__.py` i pushajte isti tag, npr. `v2.0.0` (build staje ako se
+razlikuju).
 
 ### Testovi
 

@@ -79,6 +79,9 @@ jobs:
             Invoke-WebRequest https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/Croatian.isl -OutFile installer\Croatian.isl
           } catch { Write-Warning "Croatian installer texts not downloaded: $_" }
           $version = python -c "import sprint; print(sprint.__version__)"
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "tag $env:GITHUB_REF_NAME does not match the version in sprint/__init__.py ($version)"
+          }
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DAppVersion=$version" installer\SPrint.iss
           if ($LASTEXITCODE) { throw "ISCC failed with $LASTEXITCODE" }
           "SPRINT_VERSION=$version" >> $env:GITHUB_ENV
