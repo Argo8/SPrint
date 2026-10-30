@@ -51,6 +51,62 @@ jobs:
           "SPRINT_TEST_PRINTER=SPrint Test PDF" >> $env:GITHUB_ENV
           "SPRINT_TEST_OUTPUT=$output" >> $env:GITHUB_ENV
 
+      - name: Printer diagnostics (temporary)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          @'
+          import os, time, traceback, win32print
+          from pypdf import PdfWriter
+          from sprint import printing
+          from sprint.pdfdocs import read_document
+          MM = 72 / 25.4
+          OUT = os.environ["SPRINT_TEST_OUTPUT"]
+          TEST = os.environ["SPRINT_TEST_PRINTER"]
+          def dm_info(name):
+              h = win32print.OpenPrinter(name)
+              out = {}
+              for level in (2, 8, 9):
+                  try:
+                      dm = win32print.GetPrinter(h, level)["pDevMode"]
+                      out[level] = None if dm is None else (dm.PaperSize, dm.PaperWidth, dm.PaperLength, dm.Orientation, hex(dm.Fields))
+                  except Exception as e:
+                      out[level] = f"ERR {e}"
+              win32print.ClosePrinter(h)
+              return out
+          def make(name, w, h):
+              wr = PdfWriter(); wr.add_blank_page(w * MM, h * MM); wr.write(name); return os.path.abspath(name)
+          a4, a3 = make("diag_a4.pdf", 210, 297), make("diag_a3.pdf", 297, 420)
+          backend = printing.SumatraBackend(printing.find_sumatra())
+          def measure(path, paper=None):
+              if os.path.exists(OUT): os.remove(OUT)
+              backend.print_file(TEST, path, 1, paper)
+              t0 = time.monotonic()
+              while not (os.path.exists(OUT) and os.path.getsize(OUT) > 0) and time.monotonic() - t0 < 60:
+                  time.sleep(0.5)
+              time.sleep(2)
+              d = read_document(OUT)
+              return [(round(p.width_mm), round(p.height_mm)) for p in d.pages] if d.ok else d.error
+          for p in ("Microsoft Print to PDF", TEST):
+              print("DEVMODE", p, dm_info(p))
+          print("forms:", [f["Name"] for f in win32print.EnumForms(win32print.OpenPrinter(TEST))][:40])
+          print("1 a4 default ->", measure(a4))
+          print("2 a3 default ->", measure(a3))
+          print("3 a3 paper=A4 ->", measure(a3, "A4"))
+          with printing.PlotterPaper(TEST) as paper:
+              print("override A3 accepted", paper.apply(297, 420), dm_info(TEST))
+              print("4 a4 with override A3 ->", measure(a4))
+          print("after restore", dm_info(TEST), "restore_error", paper.restore_error)
+          print("5 a4 after restore ->", measure(a4))
+          with printing.PlotterPaper(TEST) as paper:
+              try:
+                  print("override custom 300x500", paper.apply(300, 500), dm_info(TEST))
+                  print("6 a4 with custom ->", measure(a4))
+              except Exception as e:
+                  print("custom rejected:", repr(e))
+          print("after restore 2", dm_info(TEST))
+          '@ | python -
+
       - name: Run tests
         run: python -m pytest -v -rs
 

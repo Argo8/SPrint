@@ -118,8 +118,13 @@ def test_sumatra_command_line(monkeypatch):
     monkeypatch.setattr(printing.subprocess, "run", lambda args, **kw: calls.append(args) or Result())
     backend = printing.SumatraBackend("SumatraPDF.exe")
     assert backend.print_file("HP DesignJet", "C:/a b.pdf", 3)
-    assert calls == [["SumatraPDF.exe", "-print-to", "HP DesignJet", "-silent",
-                      "-print-settings", "3x", "C:/a b.pdf"]]
+    assert backend.print_file("Office", "C:/a.pdf", 1, paper="A3")
+    assert backend.print_file("Office", "C:/a.pdf", 2, paper="A4")
+    assert calls == [
+        ["SumatraPDF.exe", "-print-to", "HP DesignJet", "-silent", "-print-settings", "3x", "C:/a b.pdf"],
+        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "paper=A3", "C:/a.pdf"],
+        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "2x,paper=A4", "C:/a.pdf"],
+    ]
     Result.returncode = 1
     with pytest.raises(printing.PrintError):
         backend.print_file("HP DesignJet", "C:/a b.pdf")

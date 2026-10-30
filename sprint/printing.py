@@ -208,11 +208,13 @@ class Backend:
     """Sends one PDF file to a printer."""
     key = ""
 
-    def print_file(self, printer: str, path: str, copies: int = 1) -> bool:
+    def print_file(self, printer: str, path: str, copies: int = 1,
+                   paper: Optional[str] = None) -> bool:
         """Print and return True once the job is known to be in the print queue.
 
-        False means the job was handed over but could not be confirmed.
-        Raises on failure.
+        ``paper`` ("A4" or "A3") asks for that paper instead of the printer's
+        default where the program supports it. False means the job was handed
+        over but could not be confirmed. Raises on failure.
         """
         raise NotImplementedError
 
@@ -223,10 +225,15 @@ class SumatraBackend(Backend):
     def __init__(self, exe: str):
         self.exe = exe
 
-    def print_file(self, printer, path, copies=1):
-        args = [self.exe, "-print-to", printer, "-silent"]
+    def print_file(self, printer, path, copies=1, paper=None):
+        settings = []
         if copies > 1:
-            args += ["-print-settings", f"{copies}x"]
+            settings.append(f"{copies}x")
+        if paper:
+            settings.append(f"paper={paper}")
+        args = [self.exe, "-print-to", printer, "-silent"]
+        if settings:
+            args += ["-print-settings", ",".join(settings)]
         args.append(path)
         try:
             result = subprocess.run(args, creationflags=CREATE_NO_WINDOW,
@@ -245,7 +252,7 @@ class _QueueWatchingBackend(Backend):
     def _launch(self, printer: str, path: str) -> None:
         raise NotImplementedError
 
-    def print_file(self, printer, path, copies=1):
+    def print_file(self, printer, path, copies=1, paper=None):
         confirmed = True
         for _ in range(copies):
             before = _job_ids(printer)

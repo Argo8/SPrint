@@ -71,15 +71,15 @@ def test_print_with_paper_override_end_to_end(make_pdf):
     backend = printing.SumatraBackend(exe)
     source = make_pdf("a3.pdf", [(297, 420)])
 
-    def print_and_measure(**paper_size):
+    def print_and_measure(paper=None, **paper_size):
         if os.path.exists(output):
             os.remove(output)
         if paper_size:
-            with printing.PlotterPaper(printer) as paper:
-                paper.apply(**paper_size)
+            with printing.PlotterPaper(printer) as override:
+                override.apply(**paper_size)
                 assert backend.print_file(printer, source)
         else:
-            assert backend.print_file(printer, source)
+            assert backend.print_file(printer, source, paper=paper)
         deadline = time.monotonic() + 60
         while not (os.path.exists(output) and os.path.getsize(output) > 0):
             assert time.monotonic() < deadline, "no output from the printer"
@@ -92,3 +92,4 @@ def test_print_with_paper_override_end_to_end(make_pdf):
 
     assert print_and_measure(width_mm=297, length_mm=420) == (297, 420)
     assert print_and_measure() != (297, 420)   # default paper again once restored
+    assert print_and_measure(paper="A3") == (297, 420)   # SumatraPDF's own paper choice

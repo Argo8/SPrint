@@ -10,11 +10,11 @@ class FakeBackend(printing.Backend):
         self.calls = []
         self.fail_on = fail_on
 
-    def print_file(self, printer, path, copies=1):
+    def print_file(self, printer, path, copies=1, paper=None):
         name = os.path.basename(path)
         if name in self.fail_on:
             raise printing.PrintError("printer jammed")
-        self.calls.append((printer, name, copies))
+        self.calls.append((printer, name, copies) + ((paper,) if paper else ()))
         return True
 
 
@@ -57,7 +57,7 @@ def test_print_a4_sends_originals_and_subsets(ctx, make_pdf):
     no_a4 = make_pdf("drawing.pdf", [(841, 594)])
     sent = jobs.print_size(ctx, "A4", "Office", 2, [only_a4, mixed, no_a4])
     assert sent == 3
-    assert ctx.backend.calls == [("Office", "text.pdf", 2), ("Office", "mixed [A4].pdf", 2)]
+    assert ctx.backend.calls == [("Office", "text.pdf", 2, "A4"), ("Office", "mixed [A4].pdf", 2, "A4")]
     assert ctx.messages[-1][0] == "ok"
 
 
@@ -121,9 +121,9 @@ def test_cancel_stops_and_restores_paper(ctx, make_pdf):
     paths = [make_pdf(f"{n}.pdf", [(594, 841)]) for n in "abc"]
 
     class CancellingBackend(FakeBackend):
-        def print_file(self, printer, path, copies=1):
+        def print_file(self, printer, path, copies=1, paper=None):
             ctx.cancel.set()
-            return super().print_file(printer, path, copies)
+            return super().print_file(printer, path, copies, paper)
     ctx.backend = CancellingBackend()
     assert jobs.plot(ctx, "610", "Plotter", 1, paths) == 1
     assert len(ctx.backend.calls) == 1
