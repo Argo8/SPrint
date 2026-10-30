@@ -7,6 +7,7 @@ switch from a fresh plan whenever something changes.
 from __future__ import annotations
 
 import os
+from html import escape
 from typing import Optional
 
 from PySide6.QtCore import QPropertyAnimation, QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation
@@ -676,7 +677,7 @@ class MainWindow(QMainWindow):
         self.print_stack.addWidget(progress)
 
         self.done_box = QLabel()
-        self.done_box.setFont(font(11, True))
+        self.done_box.setTextFormat(Qt.TextFormat.RichText)
         self.done_box.setProperty("pill", "ok")
         self.done_box.setMinimumHeight(66)
         self.done_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1002,7 +1003,11 @@ class MainWindow(QMainWindow):
             self.total_bar.set_value(handled / total if total else 0)
         elif c.job_state == "done":
             self.print_stack.setCurrentIndex(2)
-            self.done_box.setText("✓ " + (t("sent_next", w=self._next_roll) if self._next_roll else t("sent_all")))
+            title = t("card_sent") if self._next_roll else t("sent_all")
+            text = f"<div style='font-size:12.5pt'>✓ {escape(title)}</div>"
+            if self._next_roll:
+                text += f"<div style='font-size:9.5pt; font-weight:500'>{escape(t('sent_next', w=self._next_roll))}</div>"
+            self.done_box.setText(text)
         else:
             self.print_stack.setCurrentIndex(0)
             self.total_bar.set_value(0, animate=False)

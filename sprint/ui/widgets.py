@@ -744,11 +744,14 @@ class PrintButton(HoverButton):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(fill)
         p.drawRoundedRect(rect, 14, 14)
-        ink = QColor("#FFFFFF")
+        dim = not enabled and c.dark   # full white on the muted fill would still look clickable
+        ink = color("#FFFFFF", .6 if dim else 1)
         box = QRectF(rect.left() + 14, rect.center().y() - 20, 40, 40)
-        p.setBrush(color("#FFFFFF", .16))
+        p.setBrush(color("#FFFFFF", .1 if dim else .16))
         p.drawRoundedRect(box, 12, 12)
+        p.setOpacity(.6 if dim else 1)
         p.drawPixmap(box.adjusted(10, 10, -10, -10).toRect(), icons.pixmap("printer", "#FFFFFF", 20))
+        p.setOpacity(1)
         right = rect.right() - 14
         if enabled and self.shortcut_text and rect.width() > 330:
             p.setFont(font(8.5, True))
@@ -768,7 +771,7 @@ class PrintButton(HoverButton):
                    metrics.elidedText(self.title, Qt.TextElideMode.ElideRight, int(text.width())))
         p.setFont(font(9))
         metrics = QFontMetrics(p.font())
-        p.setPen(color("#FFFFFF", .9))
+        p.setPen(color("#FFFFFF", .55 if dim else .9))
         p.drawText(QRectF(text.left(), rect.center().y() + 1, text.width(), 20),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    metrics.elidedText(self.sub, Qt.TextElideMode.ElideRight, int(text.width())))

@@ -126,7 +126,7 @@ _TEXTS = {
         "sending":           "Sending to the printers…",
         "stop":              "Stop",
         "sent_all":          "Everything sent",
-        "sent_next":         "Sent · next roll: {w} mm",
+        "sent_next":         "Next roll: {w} mm",
         "card_sending":      "Sending…",
         "card_sent":         "Sent",
         # toasts
@@ -279,7 +279,7 @@ _TEXTS = {
         "sending":           "Šaljem na pisače…",
         "stop":              "Zaustavi",
         "sent_all":          "Sve je poslano",
-        "sent_next":         "Poslano · sljedeća rola: {w} mm",
+        "sent_next":         "Sljedeća rola: {w} mm",
         "card_sending":      "Šaljem…",
         "card_sent":         "Poslano",
         # toasts
