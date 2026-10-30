@@ -38,16 +38,28 @@ class Settings:
     printer_a4: str = ""
     printer_a3: str = ""
     printer_plotter: str = ""
-    language: str = ""          # "" until the user picks one
-    print_program: str = ""     # "" = direct; "sumatra" or "adobe" for A4/A3 pages
+    roll: int = 610               # the roll in the plotter, remembered between sessions
+    a3_to_plotter: bool = False   # A3 pages on the plotter's 297 mm roll
+    language: str = ""            # "" until the user picks one
+    theme: str = ""               # "" = like Windows, "light" or "dark"
+    print_program: str = ""       # "" = direct; "sumatra" or "adobe" for A4/A3 pages
+    clear_when_done: bool = False  # empty the list once everything is printed
 
     _SECTIONS = {
         "printer_a4": ("printers", "a4"),
         "printer_a3": ("printers", "a3"),
         "printer_plotter": ("printers", "plotter"),
+        "roll": ("plotter", "roll"),
+        "a3_to_plotter": ("plotter", "a3"),
         "language": ("ui", "language"),
+        "theme": ("ui", "theme"),
         "print_program": ("printing", "program"),
+        "clear_when_done": ("printing", "clear_when_done"),
     }
+
+    @property
+    def has_printers(self) -> bool:
+        return bool(self.printer_a4 or self.printer_a3 or self.printer_plotter)
 
     @classmethod
     def load(cls, path: Optional[str] = None) -> "Settings":
@@ -57,13 +69,27 @@ class Settings:
         try:
             if parser.read(path, encoding="utf-8"):
                 for f in fields(cls):
-                    section, key = cls._SECTIONS[f.name]
-                    setattr(settings, f.name, parser.get(section, key, fallback=""))
+                    settings._read(parser, f)
                 return settings
         except (configparser.Error, UnicodeDecodeError, OSError):
             log.warning("Could not read %s", path, exc_info=True)
         settings._load_legacy()
         return settings
+
+    def _read(self, parser: configparser.ConfigParser, f) -> None:
+        section, key = self._SECTIONS[f.name]
+        default = getattr(self, f.name)
+        try:
+            if isinstance(default, bool):
+                value = parser.getboolean(section, key, fallback=default)
+            elif isinstance(default, int):
+                value = parser.getint(section, key, fallback=default)
+            else:
+                value = parser.get(section, key, fallback=default)
+        except ValueError:
+            log.warning("Ignoring invalid %s/%s in the settings", section, key)
+            return
+        setattr(self, f.name, value)
 
     def _load_legacy(self) -> None:
         for folder in dict.fromkeys((os.getcwd(), app_dir())):
@@ -89,7 +115,8 @@ class Settings:
             section, key = self._SECTIONS[f.name]
             if not parser.has_section(section):
                 parser.add_section(section)
-            parser.set(section, key, getattr(self, f.name) or "")
+            value = getattr(self, f.name)
+            parser.set(section, key, ("yes" if value else "no") if isinstance(value, bool) else str(value))
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:

@@ -17,6 +17,7 @@ class FakeDevMode:
         self.PaperLength = 0
         self.Copies = 1
         self.Collate = 0
+        self.Duplex = 1
         self.__dict__.update(values)
 
 
@@ -28,6 +29,8 @@ class FakeWin32Print:
         self.open_handles = 0
         self.jobs = []
         self.capabilities = {printing.DC_COPIES: 99, printing.DC_COLLATE: 1}
+        self.per_printer = {}     # printer -> {capability: value}
+        self.default = None
 
     def OpenPrinter(self, name, defaults=None):
         self.open_handles += 1
@@ -41,7 +44,12 @@ class FakeWin32Print:
         return {"pDevMode": copy.copy(self.devmode), "pPortName": "USB001"}
 
     def DeviceCapabilities(self, device, port, capability):
+        if device in self.per_printer:
+            return self.per_printer[device].get(capability)
         return self.capabilities[capability]
+
+    def GetDefaultPrinter(self):
+        return self.default
 
     def DocumentProperties(self, hwnd, handle, name, out, inp, mode):
         assert out is inp and mode == printing.DM_IN_BUFFER | printing.DM_OUT_BUFFER
@@ -87,6 +95,46 @@ def test_job_settings_named_paper(fake, paper, paper_id):
 def test_job_settings_keeps_paper_when_none_given(fake):
     fake()
     assert printing.job_settings("Office").PaperSize == 1
+
+
+def test_job_settings_duplex(fake):
+    fake()
+    dm = printing.job_settings("Office", "A4", duplex=True)
+    assert dm.Duplex == printing.DMDUP_VERTICAL and dm.Fields & printing.DM_DUPLEX
+    assert printing.job_settings("Office", duplex=False).Duplex == printing.DMDUP_SIMPLEX
+    assert not printing.job_settings("Office").Fields & printing.DM_DUPLEX   # as the printer is set
+
+
+def test_duplex_capability_and_default(fake):
+    win32 = fake()
+    win32.capabilities[printing.DC_DUPLEX] = 1
+    assert printing.supports_duplex("Office")
+    win32.capabilities[printing.DC_DUPLEX] = 0
+    assert not printing.supports_duplex("Office")
+    assert not printing.default_duplex("Office")
+    win32.devmode.Duplex, win32.devmode.Fields = 2, printing.DM_DUPLEX
+    assert printing.default_duplex("Office")
+
+
+def test_detect_printers(fake):
+    win32 = fake()
+    a4_only = {printing.DC_PAPERS: [9, 11], printing.DC_PAPERSIZE: [{"x": 2100, "y": 2970}]}
+    with_a3 = {printing.DC_PAPERS: [9, 8], printing.DC_PAPERSIZE: [(2100, 2970), (2970, 4200)]}
+    plotter = {printing.DC_PAPERS: [9, 8, 256], printing.DC_PAPERSIZE: [(9140, 15000)]}
+    win32.per_printer = {"HP LaserJet M404": a4_only, "Canon iR-ADV C3530": with_a3,
+                         "Big Printer": plotter, "Microsoft Print to PDF": with_a3}
+    win32.default = "Microsoft Print to PDF"
+    names = ["Big Printer", "Canon iR-ADV C3530", "HP LaserJet M404", "Microsoft Print to PDF"]
+    assert printing.detect_printers(names) == {
+        "a4": "HP LaserJet M404", "a3": "Canon iR-ADV C3530", "plotter": "Big Printer"}
+    win32.default = "Canon iR-ADV C3530"     # the default printer also takes A3
+    assert printing.detect_printers(names) == {
+        "a4": "Canon iR-ADV C3530", "a3": "Canon iR-ADV C3530", "plotter": "Big Printer"}
+    # recognised by name even if the driver does not tell its paper sizes
+    win32.per_printer["HP DesignJet T650"] = {}
+    assert printing.detect_printers(["HP DesignJet T650", "HP LaserJet M404"])["plotter"] == \
+        "HP DesignJet T650"
+    assert printing.detect_printers([]) == {"a4": "", "a3": "", "plotter": ""}
 
 
 def test_job_settings_rejected_size(fake):
@@ -164,11 +212,15 @@ def test_sumatra_command_line(monkeypatch):
     assert backend.print_file("Office", "C:/a.pdf", 1, paper="A3")
     assert backend.print_file("Office", "C:/a.pdf", 2, paper="A4")
     assert backend.print_file("Office", "C:/a.pdf", 1, paper=(610, 841))   # no custom sizes
+    assert backend.print_file("Office", "C:/a.pdf", 1, "A4", duplex=True)
+    assert backend.print_file("Office", "C:/a.pdf", 1, duplex=False)
     assert calls == [
         ["SumatraPDF.exe", "-print-to", "HP DesignJet", "-silent", "-print-settings", "3x", "C:/a b.pdf"],
         ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "paper=A3", "C:/a.pdf"],
         ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "2x,paper=A4", "C:/a.pdf"],
         ["SumatraPDF.exe", "-print-to", "Office", "-silent", "C:/a.pdf"],
+        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "paper=A4,duplexlong", "C:/a.pdf"],
+        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "simplex", "C:/a.pdf"],
     ]
     Result.returncode = 1
     with pytest.raises(printing.PrintError):

@@ -1,19 +1,20 @@
-"""Page-size classification and plotter roll logic.
+"""Page sizes and plotter rolls.
 
 Pure Python with no I/O, so every routing rule can be unit-tested.
 
 Routing rules:
   * A4 pages (either orientation)  -> A4 printer
-  * A3 pages (either orientation)  -> A3 printer, or the plotter via the "A3" option
+  * A3 pages (either orientation)  -> A3 printer, or the plotter's 297 mm roll
   * every other size               -> plotter, on the narrowest roll the page fits on
+
+The plotter holds one roll at a time, so its pages are printed roll by roll.
 """
 
 from __future__ import annotations
 
 import os
-from collections import Counter
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Optional
 
 PT_TO_MM = 25.4 / 72
 
@@ -27,8 +28,11 @@ STANDARD_SIZES_MM = {A4: (210.0, 297.0), A3: (297.0, 420.0)}
 #: Scanners and PDF printers rarely produce exact sizes.
 SIZE_TOLERANCE_MM = 3.0
 
-#: Roll widths available on the plotter, in mm.
+#: Roll widths the plotter takes, in mm.
 ROLL_WIDTHS_MM = (297, 420, 610, 914)
+
+#: A3 pages on the plotter: always a whole A3 sheet off the 297 mm roll.
+A3_ROLL_MM, A3_LENGTH_MM = 297, 420
 
 #: A page this much wider than a roll still counts as fitting it (rounding noise).
 _ROLL_SLACK_MM = 0.5
@@ -58,35 +62,20 @@ def exceeds_rolls(width_mm: float, height_mm: float) -> bool:
     return min(width_mm, height_mm) > max(ROLL_WIDTHS_MM) + _ROLL_SLACK_MM
 
 
-@dataclass(frozen=True)
-class PlotOption:
-    """One choice in the plotter's paper-width selector."""
-    key: str                                # "A3" or the roll width as text, e.g. "610"
-    paper_width_mm: int
-    fixed_length_mm: Optional[int] = None   # A3 sheets are always 420 mm long
+def plot_paper(width_mm: float, height_mm: float, kind: str) -> tuple[int, int]:
+    """Roll width and paper length (mm) a page takes on the plotter.
 
-    def length_for(self, width_mm: float, height_mm: float) -> int:
-        """Paper length needed for a page: its long side, rounded to whole mm."""
-        return self.fixed_length_mm or round(max(width_mm, height_mm))
-
-
-PLOT_A3 = PlotOption(A3, 297, 420)
-PLOT_OPTIONS = (PLOT_A3,) + tuple(PlotOption(str(w), w) for w in ROLL_WIDTHS_MM)
-_OPTIONS_BY_KEY = {opt.key: opt for opt in PLOT_OPTIONS}
-
-
-def plot_option(key: str) -> PlotOption:
-    return _OPTIONS_BY_KEY[key]
-
-
-def plot_option_for(width_mm: float, height_mm: float) -> Optional[PlotOption]:
-    """The plotter option a page belongs to; None for A4 pages."""
-    kind = classify(width_mm, height_mm)
+    The page's short side goes across the roll, so the paper is as long as its
+    long side. A page wider than every roll is printed smaller to fit the widest
+    one, and the paper is cut to its reduced length.
+    """
     if kind == A3:
-        return PLOT_A3
-    if kind == OTHER:
-        return _OPTIONS_BY_KEY[str(roll_for(width_mm, height_mm))]
-    return None
+        return A3_ROLL_MM, A3_LENGTH_MM
+    short, long = sorted((width_mm, height_mm))
+    roll = roll_for(width_mm, height_mm)
+    if short > roll + _ROLL_SLACK_MM:
+        return roll, round(long * roll / short)
+    return roll, round(long)
 
 
 # ── Documents ────────────────────────────────────────────────────────────────
@@ -118,70 +107,3 @@ class DocInfo:
     @property
     def ok(self) -> bool:
         return self.error is None
-
-    def indices_of_kind(self, kind: str) -> list[int]:
-        return [p.index for p in self.pages if p.kind == kind]
-
-
-@dataclass
-class PlotGroup:
-    """Pages printed on the same paper size (one paper-size change on the plotter)."""
-    paper_width_mm: int
-    length_mm: int
-    parts: list[tuple[DocInfo, list[int]]]  # page indices per document, in list order
-
-    @property
-    def page_count(self) -> int:
-        return sum(len(indices) for _, indices in self.parts)
-
-
-def plot_groups(docs: Iterable[DocInfo], key: str) -> list[PlotGroup]:
-    """Group the pages for a plotter option by paper length, longest first."""
-    option = plot_option(key)
-    docs = list(docs)
-    by_length: dict[int, dict[int, list[int]]] = {}
-    for doc_no, doc in enumerate(docs):
-        for page in doc.pages:
-            if plot_option_for(page.width_mm, page.height_mm) != option:
-                continue
-            length = option.length_for(page.width_mm, page.height_mm)
-            by_length.setdefault(length, {}).setdefault(doc_no, []).append(page.index)
-    return [
-        PlotGroup(option.paper_width_mm, length,
-                  [(docs[doc_no], indices) for doc_no, indices in sorted(parts.items())])
-        for length, parts in sorted(by_length.items(), reverse=True)
-    ]
-
-
-@dataclass
-class Summary:
-    files: int = 0
-    total_pages: int = 0
-    kinds: Counter = field(default_factory=Counter)        # A4 / A3 / OTHER -> pages
-    other_sizes: Counter = field(default_factory=Counter)  # (w, h) in whole mm -> pages
-    plot_counts: Counter = field(default_factory=Counter)  # plot option key -> pages
-    oversize: int = 0                                      # pages wider than every roll
-    unreadable: list[DocInfo] = field(default_factory=list)
-    page_errors: list[tuple[DocInfo, int, str]] = field(default_factory=list)
-
-
-def summarize(docs: Iterable[DocInfo]) -> Summary:
-    s = Summary()
-    for doc in docs:
-        s.files += 1
-        if not doc.ok:
-            s.unreadable.append(doc)
-            continue
-        s.page_errors.extend((doc, no, reason) for no, reason in doc.page_errors)
-        for page in doc.pages:
-            s.total_pages += 1
-            kind = page.kind
-            s.kinds[kind] += 1
-            if kind == OTHER:
-                s.other_sizes[(round(page.width_mm), round(page.height_mm))] += 1
-                if exceeds_rolls(page.width_mm, page.height_mm):
-                    s.oversize += 1
-            option = plot_option_for(page.width_mm, page.height_mm)
-            if option is not None:
-                s.plot_counts[option.key] += 1
-    return s

@@ -1,25 +1,60 @@
-"""Print workflows: send the right pages of the selected PDFs to each printer.
+"""Print jobs: send the pages a plan includes to the printers.
 
-Runs on a worker thread. Progress goes through ``log(message, level)``;
-levels are "info", "ok", "warn" and "error".
+Runs on a worker thread: A4 pages, then A3 pages, then the plotter pages for
+the roll in the plotter, longest paper first. The context's callbacks report
+what happens; ``log(message, level)`` levels are "info", "ok", "warn" and "error".
 """
 
 from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Optional
 
 from . import printing
 from .i18n import count, t
-from .paper import PLOT_A3, plot_groups
-from .pdfdocs import file_for_pages, read_document
+from .pdfdocs import file_for_pages
+from .plan import A3_DEST, A4_DEST, PLOT_DEST, Entry, Part, Plan, PlotRun
 
 LogFn = Callable[..., None]   # log(message, level="info")
 
 
 class Cancelled(Exception):
     """The user asked to stop printing."""
+
+
+@dataclass
+class Printers:
+    a4: str = ""
+    a3: str = ""
+    plotter: str = ""
+
+
+@dataclass
+class Job:
+    """What one press of the print button sends."""
+    a4: list[Part]
+    a3: list[Part]
+    plot: list[PlotRun]
+    printers: Printers
+    copies: int = 1
+    duplex_a4: Optional[bool] = None   # None: as the printer is set up
+    duplex_a3: Optional[bool] = None
+
+    @classmethod
+    def from_plan(cls, plan: Plan, printers: Printers, copies: int = 1,
+                  duplex_a4: Optional[bool] = None, duplex_a3: Optional[bool] = None) -> "Job":
+        return cls(plan.a4_parts, plan.a3_parts, plan.plot_runs, printers, copies,
+                   duplex_a4, duplex_a3)
+
+    def pages(self, dest: str) -> int:
+        if dest == PLOT_DEST:
+            return sum(run.page_count for run in self.plot)
+        return sum(len(part.pages) for part in (self.a4 if dest == A4_DEST else self.a3))
+
+
+def _ignore(*_args) -> None:
+    pass
 
 
 @dataclass
@@ -30,142 +65,99 @@ class JobContext:
     log: LogFn
     cancel: threading.Event = field(default_factory=threading.Event)
     printer_exists: Callable[[str], bool] = printing.printer_exists
+    progress: Callable[[str, int, int], None] = _ignore   # (destination, pages handled, pages)
+    sent: Callable[[Part], None] = _ignore                # these pages reached the printer
+    problems: int = 0                                     # parts that could not be printed
 
     def check_cancel(self) -> None:
         if self.cancel.is_set():
             raise Cancelled
 
+    def error(self, message: str) -> None:
+        self.problems += 1
+        self.log(message, "error")
 
-def roll_label(key: str) -> str:
-    return t("roll_a3") if key == PLOT_A3.key else t("roll_mm", w=key)
+
+_TARGETS = {A4_DEST: "target_a4", A3_DEST: "target_a3", PLOT_DEST: "target_plot"}
 
 
-def _check_printer(ctx: JobContext, printer: str, target: str) -> bool:
+def run(ctx: JobContext, entries: list[Entry], job: Job) -> int:
+    """Print the job; returns the number of pages sent (copies not counted)."""
+    return (_print(ctx, ctx.backend, A4_DEST, job.printers.a4, entries, job.a4, job.copies,
+                   "A4", job.duplex_a4)
+            + _print(ctx, ctx.backend, A3_DEST, job.printers.a3, entries, job.a3, job.copies,
+                     "A3", job.duplex_a3)
+            + _plot(ctx, job.printers.plotter, entries, job.plot, job.copies))
+
+
+def _printer_ready(ctx: JobContext, printer: str, dest: str) -> bool:
+    target = t(_TARGETS[dest])
     if not printer:
-        ctx.log(t("no_printer", target=target), "warn")
+        ctx.error(t("no_printer", target=target))
         return False
     if not ctx.printer_exists(printer):
-        ctx.log(t("printer_missing", printer=printer), "error")
+        ctx.error(t("printer_missing", printer=printer))
         return False
+    ctx.log(t("job_target", target=target, printer=printer))
     return True
 
 
-def _read_all(ctx: JobContext, paths: list[str]):
-    """Read every file again: it may have changed since it was added."""
-    docs = []
-    for path in paths:
-        ctx.check_cancel()
-        doc = read_document(path)
-        if doc.ok:
-            docs.append(doc)
-        else:
-            ctx.log(t("read_error", name=doc.name, error=doc.error), "error")
-    return docs
+def _print(ctx, backend, dest, printer, entries, parts, copies, paper, duplex) -> int:
+    if not parts:
+        return 0
+    total = sum(len(part.pages) for part in parts)
+    if not _printer_ready(ctx, printer, dest):
+        return 0
+    handled = sent = 0
+    ctx.progress(dest, 0, total)
+    for part in parts:
+        if _send(ctx, backend, printer, entries[part.entry], part, copies, paper, paper, duplex):
+            sent += len(part.pages)
+        handled += len(part.pages)
+        ctx.progress(dest, handled, total)
+    return sent
 
 
-def _send(ctx: JobContext, backend: printing.Backend, printer: str, doc, path: str,
-          copies: int, pages: int, paper=None, report=True) -> bool:
-    """Print one file and log the outcome; returns whether it was sent."""
+def _plot(ctx, printer, entries, runs, copies) -> int:
+    if not runs:
+        return 0
+    total = sum(run.page_count for run in runs)
+    if not _printer_ready(ctx, printer, PLOT_DEST):
+        return 0
+    handled = sent = 0
+    ctx.progress(PLOT_DEST, 0, total)
+    for run in runs:
+        ctx.log(t("plot_run", w=run.width_mm, length=run.length_mm,
+                  pages=count(run.page_count, "page")))
+        paper = (run.width_mm, run.length_mm)
+        for part in run.parts:
+            label = f"{run.width_mm}x{run.length_mm}"
+            if _send(ctx, ctx.plot_backend, printer, entries[part.entry], part, copies, paper,
+                     label, None):
+                sent += len(part.pages)
+            handled += len(part.pages)
+            ctx.progress(PLOT_DEST, handled, total)
+    return sent
+
+
+def _send(ctx, backend, printer, entry: Entry, part: Part, copies, paper, label, duplex) -> bool:
+    """Print some pages of one file and log the outcome; returns whether they were sent."""
+    ctx.check_cancel()
+    doc = entry.doc
+    indices = [doc.pages[pos].index for pos in part.pages]
+    try:
+        path = file_for_pages(doc, indices, ctx.temp_dir, label)
+    except Exception as exc:
+        ctx.error(t("temp_error", name=doc.name, error=exc))
+        return False
     ctx.check_cancel()
     try:
-        confirmed = backend.print_file(printer, path, copies, paper)
+        confirmed = backend.print_file(printer, path, copies, paper, duplex)
     except Exception as exc:
-        ctx.log(t("send_error", name=doc.name, error=exc), "error")
+        ctx.error(t("send_error", name=doc.name, error=exc))
         return False
-    if report:
-        ctx.log(t("print_sent", name=doc.name, pages=count(pages, "page")))
+    ctx.log(t("print_sent", name=doc.name, pages=count(len(indices), "page")), "ok")
     if not confirmed:
         ctx.log(t("unconfirmed"), "warn")
+    ctx.sent(part)
     return True
-
-
-def print_size(ctx: JobContext, kind: str, printer: str, copies: int, paths: list[str]) -> int:
-    """Print all pages of one size (A4 or A3); returns the number of pages sent."""
-    if not paths:
-        ctx.log(t("no_files"), "warn")
-        return 0
-    if not _check_printer(ctx, printer, kind):
-        return 0
-
-    ctx.log(t("print_start", kind=kind, printer=printer, copies=copies))
-    sent = 0
-    try:
-        for doc in _read_all(ctx, paths):
-            indices = doc.indices_of_kind(kind)
-            if not indices:
-                continue
-            try:
-                path = file_for_pages(doc, indices, ctx.temp_dir, kind)
-            except Exception as exc:
-                ctx.log(t("send_error", name=doc.name, error=exc), "error")
-                continue
-            if _send(ctx, ctx.backend, printer, doc, path, copies, len(indices), paper=kind):
-                sent += len(indices)
-    except Cancelled:
-        ctx.log(t("cancelled"), "warn")
-        return sent
-
-    if sent:
-        ctx.log(t("print_done", kind=kind), "ok")
-    else:
-        ctx.log(t("print_nothing", kind=kind), "warn")
-    return sent
-
-
-def plot(ctx: JobContext, key: str, printer: str, copies: int, paths: list[str]) -> int:
-    """Plot the pages of one roll option, each on paper of roll width × page length.
-
-    Pages are sent longest first. Copies are collated per paper length: every
-    file of that length, then again. Returns the number of pages sent (each
-    page counted once).
-    """
-    if not key:
-        ctx.log(t("plot_no_roll"), "warn")
-        return 0
-    if not paths:
-        ctx.log(t("no_files"), "warn")
-        return 0
-    if not _check_printer(ctx, printer, t("target_plotter")):
-        return 0
-
-    label = roll_label(key)
-    try:
-        groups = plot_groups(_read_all(ctx, paths), key)
-    except Cancelled:
-        ctx.log(t("cancelled"), "warn")
-        return 0
-    if not groups:
-        ctx.log(t("plot_nothing", label=label), "warn")
-        return 0
-
-    ctx.log(t("plot_start", printer=printer, label=label,
-              groups=count(len(groups), "group"), copies=copies))
-    sent = 0
-    try:
-        for number, group in enumerate(groups, start=1):
-            ctx.check_cancel()
-            paper = (group.paper_width_mm, group.length_mm)
-            ctx.log(t("plot_group", i=number, total=len(groups), w=paper[0], length=paper[1],
-                      pages=count(group.page_count, "page")))
-            files = []
-            for doc, indices in group.parts:
-                try:
-                    path = file_for_pages(doc, indices, ctx.temp_dir, f"{paper[0]}x{paper[1]}")
-                except Exception as exc:
-                    ctx.log(t("send_error", name=doc.name, error=exc), "error")
-                    continue
-                files.append((doc, indices, path))
-
-            for copy_no in range(copies):
-                for doc, indices, path in files:
-                    first = copy_no == 0
-                    if _send(ctx, ctx.plot_backend, printer, doc, path, 1, len(indices),
-                             paper=paper, report=first) and first:
-                        sent += len(indices)
-    except Cancelled:
-        ctx.log(t("cancelled"), "warn")
-        return sent
-
-    if sent:
-        ctx.log(t("plot_done"), "ok")
-    return sent

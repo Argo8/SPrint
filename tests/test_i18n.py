@@ -30,8 +30,18 @@ def test_croatian_plurals(n, form):
 def test_croatian_plural_forms_differ_by_noun():
     i18n.set_language("hr")
     assert count(3, "file") == "3 datoteke"
-    assert count(1, "group") == "1 grupa"
-    assert count(5, "group") == "5 grupa"
+    assert count(5, "sheet") == "5 listova"
+    assert count(2, "skipped") == "2 preskočene"
+    assert count(21, "bad_page") == "21 nečitljiva stranica"
+
+
+def test_meters_and_lists():
+    assert i18n.meters(2102) == "2.1 m"
+    assert i18n.join_and([420, 610, 914]) == "420, 610 and 914"
+    assert i18n.join_and([914]) == "914"
+    i18n.set_language("hr")
+    assert i18n.meters(2102) == "2,1 m"
+    assert i18n.join_and([610, 914]) == "610 i 914"
 
 
 def test_english_plurals():
@@ -41,7 +51,7 @@ def test_english_plurals():
 
 
 def test_t_formats_and_falls_back():
-    assert i18n.t("roll_mm", w=610) == "610 mm"
+    assert i18n.t("roll_title", w=610) == "Roll 610 mm"
     assert i18n.t("no_such_key") == "no_such_key"
     with pytest.raises(ValueError):
         i18n.set_language("de")

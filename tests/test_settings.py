@@ -6,9 +6,18 @@ from sprint.settings import Settings
 
 def test_round_trip_with_awkward_names(tmp_path):
     path = str(tmp_path / "sub" / "settings.ini")
-    Settings("Pisač 100% A4", "\\\\server\\Kopirka A3", "HP DesignJet T830", "hr").save(path)
-    loaded = Settings.load(path)
-    assert loaded == Settings("Pisač 100% A4", "\\\\server\\Kopirka A3", "HP DesignJet T830", "hr")
+    original = Settings(printer_a4="Pisač 100% A4", printer_a3="\\\\server\\Kopirka A3",
+                        printer_plotter="HP DesignJet T830", language="hr", roll=914,
+                        a3_to_plotter=True, theme="dark", clear_when_done=True)
+    original.save(path)
+    assert Settings.load(path) == original
+
+
+def test_invalid_values_keep_defaults(tmp_path):
+    path = tmp_path / "settings.ini"
+    path.write_text("[plotter]\nroll = wide\na3 = maybe\n[ui]\nlanguage = hr\n", encoding="utf-8")
+    loaded = Settings.load(str(path))
+    assert (loaded.roll, loaded.a3_to_plotter, loaded.language) == (610, False, "hr")
 
 
 def test_missing_file_gives_defaults(tmp_path, monkeypatch):

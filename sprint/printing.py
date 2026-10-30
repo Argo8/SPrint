@@ -27,6 +27,7 @@ except ImportError:  # not on Windows (tests, development)
     win32gui = win32print = None
 
 from .paper import PT_TO_MM
+from .pdfdocs import PDFIUM_LOCK, read_document
 from .settings import app_dir
 
 log = logging.getLogger(__name__)
@@ -41,15 +42,18 @@ DM_PAPERSIZE = 0x2
 DM_PAPERLENGTH = 0x4
 DM_PAPERWIDTH = 0x8
 DM_COPIES = 0x100
+DM_DUPLEX = 0x1000
 DM_COLLATE = 0x8000
 DM_OUT_BUFFER = 2
 DM_IN_BUFFER = 8
 DMORIENT_PORTRAIT = 1
 DMCOLLATE_TRUE = 1
+DMDUP_SIMPLEX, DMDUP_VERTICAL = 1, 2    # one-sided; two-sided, turned on the long edge
+DMPAPER_A3 = 8
 DMPAPER_USER = 256
 
 # DeviceCapabilities / GetDeviceCaps indexes (wingdi.h)
-DC_COPIES, DC_COLLATE = 18, 22
+DC_PAPERS, DC_PAPERSIZE, DC_DUPLEX, DC_COPIES, DC_COLLATE = 2, 3, 7, 18, 22
 HORZRES, VERTRES = 8, 10
 LOGPIXELSX, LOGPIXELSY = 88, 90
 PHYSICALWIDTH, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY = 110, 111, 112, 113
@@ -66,6 +70,14 @@ SUMATRA_TIMEOUT_S = 15 * 60   # one job; large plots can take a while to spool
 QUEUE_TIMEOUT_S = 45          # Adobe may need a while to start
 
 Paper = Union[str, tuple]     # "A4", "A3" or (width_mm, length_mm)
+
+#: Printers that make files instead of paper; never picked automatically.
+VIRTUAL_PRINTER_WORDS = ("print to pdf", "xps document writer", "onenote", "fax", "pdf24",
+                         "adobe pdf", "cutepdf", "pdfcreator", "bullzip", "foxit", "send to")
+PLOTTER_WORDS = ("designjet", "plotter", "imageprograf", "surecolor", "plotwave",
+                 "colorwave", "kip ", "t650", "t630", "t830", "t1700")
+#: A printer that takes paper at least this wide (mm) is a plotter.
+PLOTTER_MIN_WIDTH_MM = 594
 
 
 class PrintError(Exception):
@@ -101,6 +113,83 @@ def printer_exists(name: str) -> bool:
         return False
     win32print.ClosePrinter(handle)
     return True
+
+
+def _port(printer: str) -> str:
+    handle = win32print.OpenPrinter(printer)
+    try:
+        return win32print.GetPrinter(handle, 2)["pPortName"]
+    finally:
+        win32print.ClosePrinter(handle)
+
+
+def _capability(printer: str, capability: int, port: Optional[str] = None):
+    """DeviceCapabilities, or None when the driver cannot tell."""
+    try:
+        return win32print.DeviceCapabilities(printer, port or _port(printer), capability)
+    except Exception:
+        log.debug("Cannot read capability %s of %s", capability, printer, exc_info=True)
+        return None
+
+
+def supports_duplex(printer: str) -> bool:
+    return _capability(printer, DC_DUPLEX) == 1
+
+
+def default_duplex(printer: str) -> bool:
+    """Whether the printer prints two-sided by default (its printing preferences)."""
+    try:
+        handle = win32print.OpenPrinter(printer)
+        try:
+            devmode = win32print.GetPrinter(handle, 2)["pDevMode"]
+        finally:
+            win32print.ClosePrinter(handle)
+        return bool(devmode and devmode.Fields & DM_DUPLEX and devmode.Duplex > DMDUP_SIMPLEX)
+    except Exception:
+        return False
+
+
+def _paper_capabilities(printer: str) -> tuple[set[int], float]:
+    """Paper IDs the driver offers and the widest paper's short side in mm."""
+    port = None
+    try:
+        port = _port(printer)
+    except Exception:
+        pass
+    ids = set(_capability(printer, DC_PAPERS, port) or ())
+    widest = 0.0
+    for size in _capability(printer, DC_PAPERSIZE, port) or ():
+        x, y = (size["x"], size["y"]) if isinstance(size, dict) else tuple(size)[:2]
+        widest = max(widest, min(x, y) / 10)   # tenths of a millimetre
+    return ids, widest
+
+
+def is_virtual_printer(name: str) -> bool:
+    lowered = name.casefold()
+    return any(word in lowered for word in VIRTUAL_PRINTER_WORDS)
+
+
+def detect_printers(printers: Optional[list[str]] = None) -> dict[str, str]:
+    """Best guess for the A4 printer, the A3 printer and the plotter ("" when none fits).
+
+    The plotter takes paper at least A1 wide (or is named like one), the A4
+    printer is the Windows default printer (else one without A3, else any), and
+    the A3 printer is another printer that offers A3 (else the A4 printer, if it can).
+    """
+    names = list_printers() if printers is None else list(printers)
+    candidates = [n for n in names if not is_virtual_printer(n)] or names
+    caps = {name: _paper_capabilities(name) for name in candidates}
+    plotter = next((n for n in candidates
+                    if any(w in n.casefold() for w in PLOTTER_WORDS)
+                    or caps[n][1] >= PLOTTER_MIN_WIDTH_MM), "")
+    others = [n for n in candidates if n != plotter]
+    a4_only = [n for n in others if DMPAPER_A3 not in caps[n][0]]
+    default = default_printer()
+    a4 = default if default in others else (a4_only or others or [""])[0]
+    a3 = next((n for n in others if DMPAPER_A3 in caps[n][0] and n != a4), "")
+    if not a3 and a4 and DMPAPER_A3 in caps[a4][0]:
+        a3 = a4
+    return {"a4": a4, "a3": a3, "plotter": plotter}
 
 
 def open_printer_preferences(name: str) -> None:
@@ -139,9 +228,11 @@ def _wait_for_new_job(printer: str, before: Optional[set[int]],
 
 # ── Paper size and page placement ────────────────────────────────────────────
 
-def job_settings(printer: str, paper: Optional[Paper] = None, copies: int = 1):
+def job_settings(printer: str, paper: Optional[Paper] = None, copies: int = 1,
+                 duplex: Optional[bool] = None):
     """The printer's settings for this user (its "printing preferences") with the
-    paper size and copies of one job. Nothing is saved to the printer.
+    paper size, copies and (unless None) one- or two-sided printing of one job.
+    Nothing is saved to the printer.
 
     Raises PrintError if the driver does not accept the paper size.
     """
@@ -167,6 +258,9 @@ def job_settings(printer: str, paper: Optional[Paper] = None, copies: int = 1):
         devmode.Copies = copies
         devmode.Collate = DMCOLLATE_TRUE
         devmode.Fields |= DM_COPIES | DM_COLLATE
+        if duplex is not None:
+            devmode.Duplex = DMDUP_VERTICAL if duplex else DMDUP_SIMPLEX
+            devmode.Fields |= DM_DUPLEX
         # Let the driver validate the request; it may adjust it to what it supports.
         win32print.DocumentProperties(None, handle, printer, devmode, devmode,
                                       DM_IN_BUFFER | DM_OUT_BUFFER)
@@ -208,12 +302,13 @@ class Backend:
     key = ""
 
     def print_file(self, printer: str, path: str, copies: int = 1,
-                   paper: Optional[Paper] = None) -> bool:
+                   paper: Optional[Paper] = None, duplex: Optional[bool] = None) -> bool:
         """Print and return True once the job is known to be in the print queue.
 
-        ``paper`` asks for that paper instead of the printer's default, where the
-        program supports it. False means the job was handed over but could not be
-        confirmed. Raises on failure.
+        ``paper`` asks for that paper instead of the printer's default, and
+        ``duplex`` for one- or two-sided printing, where the program supports it.
+        False means the job was handed over but could not be confirmed. Raises on
+        failure.
         """
         raise NotImplementedError
 
@@ -222,16 +317,18 @@ class DirectBackend(Backend):
     """Renders the pages with PDFium straight into a Windows print job (vector output)."""
     key = "direct"
 
-    def print_file(self, printer, path, copies=1, paper=None):
-        import pypdfium2 as pdfium
-        import pypdfium2.raw as pdfium_c
-
-        from .pdfdocs import read_document
-
-        devmode = job_settings(printer, paper, copies)
+    def print_file(self, printer, path, copies=1, paper=None, duplex=None):
+        devmode = job_settings(printer, paper, copies, duplex)
         if isinstance(paper, tuple) and devmode.PaperSize == DMPAPER_USER:
             devmode = _room_for_margins(printer, paper, copies, devmode)
         sizes = {p.index: (p.width_mm, p.height_mm) for p in read_document(path).pages}
+        with PDFIUM_LOCK:
+            return self._print(printer, path, copies, devmode, sizes)
+
+    def _print(self, printer, path, copies, devmode, sizes):
+        import pypdfium2 as pdfium
+        import pypdfium2.raw as pdfium_c
+
         name = os.path.basename(path)
         pdf = pdfium.PdfDocument(path)
         jobs = 1
@@ -268,11 +365,7 @@ class DirectBackend(Backend):
 def _driver_copies(printer: str, copies: int, collate: bool) -> bool:
     """Whether the driver itself can print this many (collated) copies."""
     try:
-        handle = win32print.OpenPrinter(printer)
-        try:
-            port = win32print.GetPrinter(handle, 2)["pPortName"]
-        finally:
-            win32print.ClosePrinter(handle)
+        port = _port(printer)
         if win32print.DeviceCapabilities(printer, port, DC_COPIES) < copies:
             return False
         return not collate or win32print.DeviceCapabilities(printer, port, DC_COLLATE) == 1
@@ -313,12 +406,14 @@ class SumatraBackend(Backend):
     def __init__(self, exe: str):
         self.exe = exe
 
-    def print_file(self, printer, path, copies=1, paper=None):
+    def print_file(self, printer, path, copies=1, paper=None, duplex=None):
         settings = []
         if copies > 1:
             settings.append(f"{copies}x")
         if paper in NAMED_PAPER_MM:   # SumatraPDF 3.6 knows no custom sizes
             settings.append(f"paper={paper}")
+        if duplex is not None:
+            settings.append("duplexlong" if duplex else "simplex")
         args = [self.exe, "-print-to", printer, "-silent"]
         if settings:
             args += ["-print-settings", ",".join(settings)]
@@ -340,7 +435,7 @@ class _QueueWatchingBackend(Backend):
     def _launch(self, printer: str, path: str) -> None:
         raise NotImplementedError
 
-    def print_file(self, printer, path, copies=1, paper=None):
+    def print_file(self, printer, path, copies=1, paper=None, duplex=None):
         confirmed = True
         for _ in range(copies):
             before = _job_ids(printer)

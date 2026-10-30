@@ -1,6 +1,5 @@
 # Runtime dependencies (Windows, Python 3.10+):  pip install -r requirements.txt
-ttkbootstrap>=2.2,<3        # theme; 2.x is required for the intended look
-tkinterdnd2>=0.4            # drag & drop
+PySide6-Essentials>=6.7     # the window (Qt)
 pypdf[crypto]>=4            # reading and splitting PDFs (crypto: AES-encrypted PDFs)
-pypdfium2>=4.30             # rendering pages for printing (PDFium, as in Chrome)
+pypdfium2>=4.30             # rendering pages for printing and previews (PDFium, as in Chrome)
 pywin32>=306; sys_platform == "win32"   # Windows printer API
