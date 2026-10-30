@@ -1,0 +1,93 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests-linux:
+    name: Tests (Linux, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q -rs
+
+  windows:
+    name: Tests and SPrint.exe (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest pyinstaller
+
+      - name: Set up SumatraPDF and a printer that prints to a file
+        shell: pwsh
+        run: |
+          $sumatra = "$env:LOCALAPPDATA\SumatraPDF"
+          Invoke-WebRequest https://www.sumatrapdfreader.org/dl/rel/3.6.1/SumatraPDF-3.6.1-64.zip -OutFile "$env:RUNNER_TEMP\sumatra.zip"
+          Expand-Archive "$env:RUNNER_TEMP\sumatra.zip" -DestinationPath $sumatra
+          Get-ChildItem $sumatra -Filter "SumatraPDF-*.exe" | Rename-Item -NewName SumatraPDF.exe
+          $output = "$env:RUNNER_TEMP\sprint-test-output.pdf"
+          Add-PrinterPort -Name $output
+          Add-Printer -Name "SPrint Test PDF" -DriverName "Microsoft Print To PDF" -PortName $output
+          Get-Printer | Format-Table Name, DriverName, PortName
+          "SPRINT_TEST_PRINTER=SPrint Test PDF" >> $env:GITHUB_ENV
+          "SPRINT_TEST_OUTPUT=$output" >> $env:GITHUB_ENV
+
+      - name: Run tests
+        run: python -m pytest -v -rs
+
+      - name: Build SPrint.exe
+        run: pyinstaller --noconfirm SPrint.spec
+
+      - name: Smoke-test SPrint.exe
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          New-Item -ItemType Directory smoke | Out-Null
+          python -c "from pypdf import PdfWriter; w = PdfWriter(); w.add_blank_page(595, 842); w.add_blank_page(1684, 2384); w.write('smoke/sample.pdf')"
+          $app = Start-Process dist\SPrint.exe -ArgumentList '--smoke-test', "`"$PWD\smoke`"" -PassThru -Wait
+          $log = "$env:APPDATA\SPrint\sprint.log"
+          Get-Content $log -Tail 20
+          if ($app.ExitCode -ne 0) { throw "SPrint.exe exited with $($app.ExitCode)" }
+          if (-not (Select-String -Path $log -Pattern "Smoke test: 1 files read, failed: none" -Quiet)) {
+            throw "SPrint.exe did not read the sample PDF"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SPrint-exe
+          path: dist/SPrint.exe
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [tests-linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: SPrint-exe
+      - name: Create release with SPrint.exe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" SPrint.exe --repo "$GITHUB_REPOSITORY" --title "SPrint $GITHUB_REF_NAME" --generate-notes
