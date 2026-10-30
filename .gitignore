@@ -1,5 +1,6 @@
 *.ini
 __pycache__/
+.pytest_cache/
 dist/
 build/
 *.exe
@@ -9,3 +10,4 @@ exe/
 settings1.png
 settings2.png
 KP_logo.ico
+installer/Croatian.isl

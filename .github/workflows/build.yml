@@ -1,0 +1,150 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Publish a release (tag v<version from sprint/__init__.py>) when the build succeeds
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  tests-linux:
+    name: Tests (Linux, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q -rs
+
+  windows:
+    name: Tests and SPrint.exe (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest pyinstaller
+
+      - name: Set up a printer that prints to a file, and SumatraPDF (optional program)
+        shell: pwsh
+        run: |
+          $sumatra = "$env:LOCALAPPDATA\SumatraPDF"
+          Invoke-WebRequest https://www.sumatrapdfreader.org/dl/rel/3.6.1/SumatraPDF-3.6.1-64.zip -OutFile "$env:RUNNER_TEMP\sumatra.zip"
+          Expand-Archive "$env:RUNNER_TEMP\sumatra.zip" -DestinationPath $sumatra
+          Get-ChildItem $sumatra -Filter "SumatraPDF-*.exe" | Rename-Item -NewName SumatraPDF.exe
+          $output = "$env:RUNNER_TEMP\sprint-test-output.pdf"
+          Add-PrinterPort -Name $output
+          Add-Printer -Name "SPrint Test PDF" -DriverName "Microsoft Print To PDF" -PortName $output
+          Get-Printer | Format-Table Name, DriverName, PortName
+          "SPRINT_TEST_PRINTER=SPrint Test PDF" >> $env:GITHUB_ENV
+          "SPRINT_TEST_OUTPUT=$output" >> $env:GITHUB_ENV
+
+      - name: Run tests
+        run: python -m pytest -v -rs
+
+      - name: Build SPrint (program folder)
+        run: pyinstaller --noconfirm SPrint.spec
+
+      - name: Smoke-test the built program
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          New-Item -ItemType Directory smoke | Out-Null
+          python -c "from pypdf import PdfWriter; w = PdfWriter(); w.add_blank_page(595, 842); w.add_blank_page(1684, 2384); w.write('smoke/sample.pdf')"
+          $app = Start-Process dist\SPrint\SPrint.exe -ArgumentList '--smoke-test', "`"$PWD\smoke`"" -PassThru -Wait
+          $log = "$env:APPDATA\SPrint\sprint.log"
+          Get-Content $log -Tail 20
+          if ($app.ExitCode -ne 0) { throw "SPrint.exe exited with $($app.ExitCode)" }
+          if (-not (Select-String -Path $log -Pattern "Smoke test: 1 files read, failed: none" -Quiet)) {
+            throw "SPrint.exe did not read the sample PDF"
+          }
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          choco upgrade innosetup -y --no-progress | Select-Object -Last 2
+          try {   # unofficial Croatian wizard texts; the installer is English-only without them
+            Invoke-WebRequest https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/Croatian.isl -OutFile installer\Croatian.isl
+          } catch { Write-Warning "Croatian installer texts not downloaded: $_" }
+          $version = python -c "import sprint; print(sprint.__version__)"
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "tag $env:GITHUB_REF_NAME does not match the version in sprint/__init__.py ($version)"
+          }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp "/DAppVersion=$version" installer\SPrint.iss
+          if ($LASTEXITCODE) { throw "ISCC failed with $LASTEXITCODE" }
+          "SPRINT_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Install, start and uninstall SPrint
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $setup = Start-Process "dist\SPrint-Setup-$env:SPRINT_VERSION.exe" -PassThru -Wait `
+            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/TASKS=sendto'
+          if ($setup.ExitCode -ne 0) { throw "setup exited with $($setup.ExitCode)" }
+          $dir = "$env:LOCALAPPDATA\Programs\SPrint"
+          $shortcuts = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SPrint.lnk", "$env:APPDATA\Microsoft\Windows\SendTo\SPrint.lnk"
+          foreach ($path in @("$dir\SPrint.exe") + $shortcuts) {
+            if (-not (Test-Path $path)) { throw "not installed: $path" }
+          }
+          Remove-Item "$env:APPDATA\SPrint\sprint.log" -ErrorAction SilentlyContinue
+          $app = Start-Process "$dir\SPrint.exe" -ArgumentList '--smoke-test', "`"$PWD\smoke`"" -PassThru -Wait
+          if ($app.ExitCode -ne 0) { throw "installed SPrint.exe exited with $($app.ExitCode)" }
+          if (-not (Select-String -Path "$env:APPDATA\SPrint\sprint.log" -Pattern "failed: none" -Quiet)) {
+            throw "installed SPrint.exe did not read the sample PDF"
+          }
+          Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          Start-Sleep -Seconds 3
+          foreach ($path in @("$dir\SPrint.exe") + $shortcuts) {
+            if (Test-Path $path) { throw "left behind by the uninstaller: $path" }
+          }
+
+      - name: Pack the portable version
+        shell: pwsh
+        run: Compress-Archive -Path dist\SPrint\* -DestinationPath "dist\SPrint-portable-$env:SPRINT_VERSION.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SPrint-${{ env.SPRINT_VERSION }}
+          path: |
+            dist/SPrint-Setup-*.exe
+            dist/SPrint-portable-*.zip
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release
+    needs: [tests-linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4   # for .github/release-notes.md
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: SPrint-*
+          merge-multiple: true
+      - name: Create release with the installer and the portable version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # a pushed tag already exists; from "Run workflow" the tag is created on this commit
+          tag="v$(python3 -c 'import sprint; print(sprint.__version__)')"
+          notes=$(sed "s/{version}/${tag#v}/g" .github/release-notes.md)
+          gh release create "$tag" SPrint-Setup-*.exe SPrint-portable-*.zip --target "$GITHUB_SHA" \
+            --repo "$GITHUB_REPOSITORY" --title "SPrint $tag" --notes "$notes" --generate-notes
