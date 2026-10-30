@@ -24,11 +24,11 @@ class Cancelled(Exception):
 
 @dataclass
 class JobContext:
-    backend: printing.Backend
+    backend: printing.Backend         # A4 / A3 printers
+    plot_backend: printing.Backend    # plotter: must be able to set any paper size
     temp_dir: str
     log: LogFn
     cancel: threading.Event = field(default_factory=threading.Event)
-    paper_cls: type = printing.PlotterPaper   # replaced in tests
     printer_exists: Callable[[str], bool] = printing.printer_exists
 
     def check_cancel(self) -> None:
@@ -63,12 +63,12 @@ def _read_all(ctx: JobContext, paths: list[str]):
     return docs
 
 
-def _send(ctx: JobContext, printer: str, doc, path: str, copies: int, pages: int,
-          paper=None, report=True) -> bool:
+def _send(ctx: JobContext, backend: printing.Backend, printer: str, doc, path: str,
+          copies: int, pages: int, paper=None, report=True) -> bool:
     """Print one file and log the outcome; returns whether it was sent."""
     ctx.check_cancel()
     try:
-        confirmed = ctx.backend.print_file(printer, path, copies, paper)
+        confirmed = backend.print_file(printer, path, copies, paper)
     except Exception as exc:
         ctx.log(t("send_error", name=doc.name, error=exc), "error")
         return False
@@ -99,7 +99,7 @@ def print_size(ctx: JobContext, kind: str, printer: str, copies: int, paths: lis
             except Exception as exc:
                 ctx.log(t("send_error", name=doc.name, error=exc), "error")
                 continue
-            if _send(ctx, printer, doc, path, copies, len(indices), paper=kind):
+            if _send(ctx, ctx.backend, printer, doc, path, copies, len(indices), paper=kind):
                 sent += len(indices)
     except Cancelled:
         ctx.log(t("cancelled"), "warn")
@@ -113,10 +113,11 @@ def print_size(ctx: JobContext, kind: str, printer: str, copies: int, paths: lis
 
 
 def plot(ctx: JobContext, key: str, printer: str, copies: int, paths: list[str]) -> int:
-    """Plot the pages of one roll option, one paper length at a time.
+    """Plot the pages of one roll option, each on paper of roll width × page length.
 
-    Copies are collated per paper length: every file of that length, then again.
-    Returns the number of pages sent (each page counted once).
+    Pages are sent longest first. Copies are collated per paper length: every
+    file of that length, then again. Returns the number of pages sent (each
+    page counted once).
     """
     if not key:
         ctx.log(t("plot_no_roll"), "warn")
@@ -140,24 +141,16 @@ def plot(ctx: JobContext, key: str, printer: str, copies: int, paths: list[str])
     ctx.log(t("plot_start", printer=printer, label=label,
               groups=count(len(groups), "group"), copies=copies))
     sent = 0
-    paper = _open_paper(ctx, printer)
     try:
         for number, group in enumerate(groups, start=1):
             ctx.check_cancel()
-            ctx.log(t("plot_group", i=number, total=len(groups), length=group.length_mm,
+            paper = (group.paper_width_mm, group.length_mm)
+            ctx.log(t("plot_group", i=number, total=len(groups), w=paper[0], length=paper[1],
                       pages=count(group.page_count, "page")))
-            if paper is not None:
-                try:
-                    w, h = paper.apply(group.paper_width_mm, group.length_mm)
-                    ctx.log(t("paper_set", w=_mm(w), h=_mm(h)))
-                except Exception as exc:
-                    ctx.log(t("paper_fail", error=exc), "warn")
-
             files = []
             for doc, indices in group.parts:
                 try:
-                    path = file_for_pages(doc, indices, ctx.temp_dir,
-                                          f"{group.paper_width_mm}x{group.length_mm}")
+                    path = file_for_pages(doc, indices, ctx.temp_dir, f"{paper[0]}x{paper[1]}")
                 except Exception as exc:
                     ctx.log(t("send_error", name=doc.name, error=exc), "error")
                     continue
@@ -166,37 +159,13 @@ def plot(ctx: JobContext, key: str, printer: str, copies: int, paths: list[str])
             for copy_no in range(copies):
                 for doc, indices, path in files:
                     first = copy_no == 0
-                    if _send(ctx, printer, doc, path, 1, len(indices), report=first) and first:
+                    if _send(ctx, ctx.plot_backend, printer, doc, path, 1, len(indices),
+                             paper=paper, report=first) and first:
                         sent += len(indices)
     except Cancelled:
         ctx.log(t("cancelled"), "warn")
         return sent
-    finally:
-        _close_paper(ctx, paper)
 
     if sent:
         ctx.log(t("plot_done"), "ok")
     return sent
-
-
-def _open_paper(ctx: JobContext, printer: str):
-    """Start overriding the plotter's paper size; None if that is not possible."""
-    paper = ctx.paper_cls(printer)
-    try:
-        paper.__enter__()
-    except Exception as exc:
-        ctx.log(t("paper_fail", error=exc), "warn")
-        return None
-    return paper
-
-
-def _close_paper(ctx: JobContext, paper) -> None:
-    if paper is None:
-        return
-    paper.__exit__(None, None, None)
-    if paper.restore_error is not None:
-        ctx.log(t("paper_restore_fail", error=paper.restore_error), "warn")
-
-
-def _mm(value: float) -> str:
-    return str(int(value)) if float(value).is_integer() else f"{value:.1f}"

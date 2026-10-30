@@ -2,4 +2,5 @@
 ttkbootstrap>=2.2,<3        # theme; 2.x is required for the intended look
 tkinterdnd2>=0.4            # drag & drop
 pypdf[crypto]>=4            # reading and splitting PDFs (crypto: AES-encrypted PDFs)
+pypdfium2>=4.30             # rendering pages for printing (PDFium, as in Chrome)
 pywin32>=306; sys_platform == "win32"   # Windows printer API

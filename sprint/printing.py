@@ -1,26 +1,32 @@
-"""Windows printing: printer list, plotter paper size and the program that prints PDFs.
+"""Windows printing: printers, paper sizes and the ways a PDF reaches the printer.
 
-PDFs are printed by an external program, in order of preference:
-  * SumatraPDF  — silent, waits until the job is spooled, supports copies
-  * Adobe Reader / Acrobat ("/t") — returns at once, so we watch the print queue
-  * the default PDF app via the Windows "printto" verb (same caveat)
+By default SPrint renders the pages itself with PDFium straight into a Windows
+print job ("direct"). The job carries its own settings, so any paper size the
+driver accepts works - custom plot lengths included - and the printer's
+settings are never changed. A4/A3 pages can instead go through an external
+program (settings.ini, [printing] program = sumatra | adobe):
+  * SumatraPDF - silent, waits until the job is spooled
+  * Adobe Reader / Acrobat ("/t") - returns at once, so we watch the print queue
 """
 
 from __future__ import annotations
 
+import ctypes
 import glob
 import logging
+import math
 import os
 import subprocess
 import time
-from typing import Optional
+from typing import Optional, Union
 
 try:
-    import win32api
+    import win32gui
     import win32print
 except ImportError:  # not on Windows (tests, development)
-    win32api = win32print = None
+    win32gui = win32print = None
 
+from .paper import PT_TO_MM
 from .settings import app_dir
 
 log = logging.getLogger(__name__)
@@ -34,17 +40,31 @@ DM_ORIENTATION = 0x1
 DM_PAPERSIZE = 0x2
 DM_PAPERLENGTH = 0x4
 DM_PAPERWIDTH = 0x8
+DM_COPIES = 0x100
+DM_COLLATE = 0x8000
 DM_OUT_BUFFER = 2
 DM_IN_BUFFER = 8
 DMORIENT_PORTRAIT = 1
+DMCOLLATE_TRUE = 1
 DMPAPER_USER = 256
+
+# GetDeviceCaps indexes (wingdi.h)
+HORZRES, VERTRES = 8, 10
+LOGPIXELSX, LOGPIXELSY = 88, 90
+PHYSICALWIDTH, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY = 110, 111, 112, 113
+
+# FPDF_RenderPage flags: annotations, print quality, text as outlines (no GDI font lookups)
+RENDER_FLAGS = 0x01 | 0x800 | 0x04
 
 #: Paper sizes drivers know by name (portrait, mm) -> Windows paper ID.
 #: Named sizes are understood by more drivers than a custom width/length.
 STANDARD_PAPER = {(210, 297): 9, (297, 420): 8, (420, 594): 66}   # A4, A3, A2
+NAMED_PAPER_MM = {"A4": (210, 297), "A3": (297, 420)}
 
 SUMATRA_TIMEOUT_S = 15 * 60   # one job; large plots can take a while to spool
 QUEUE_TIMEOUT_S = 45          # Adobe may need a while to start
+
+Paper = Union[str, tuple]     # "A4", "A3" or (width_mm, length_mm)
 
 
 class PrintError(Exception):
@@ -116,90 +136,68 @@ def _wait_for_new_job(printer: str, before: Optional[set[int]],
     return False
 
 
-# ── Plotter paper size ───────────────────────────────────────────────────────
+# ── Paper size and page placement ────────────────────────────────────────────
 
-def _devmode(handle, level: int):
-    try:
-        return win32print.GetPrinter(handle, level)["pDevMode"]
-    except Exception:
-        return None
+def job_settings(printer: str, paper: Optional[Paper] = None, copies: int = 1):
+    """The printer's settings for this user (its "printing preferences") with the
+    paper size and copies of one job. Nothing is saved to the printer.
 
-
-def _first_devmode(handle, levels):
-    for level in levels:
-        devmode = _devmode(handle, level)
-        if devmode is not None:
-            return devmode
-    return None
-
-
-class PlotterPaper:
-    """Temporarily makes a custom paper size the printer's default for this user.
-
-    Programs started with "print to" use the printer's default settings, so this
-    is how every group of plot pages gets its paper length. The previous
-    per-user settings are restored on exit; nothing changes for other users.
-
-        with PlotterPaper(name) as paper:
-            paper.apply(610, 841)
-            ...print...
-        if paper.restore_error: ...
+    Raises PrintError if the driver does not accept the paper size.
     """
-
-    def __init__(self, printer: str):
-        self.printer = printer
-        self.restore_error: Optional[Exception] = None
-        self._handle = None
-        self._original = None
-        self._changed = False
-
-    def __enter__(self) -> "PlotterPaper":
-        _require_windows()
-        self._handle = win32print.OpenPrinter(self.printer)
-        self._original = _devmode(self._handle, 9)
-        return self
-
-    def apply(self, width_mm: float, length_mm: float) -> tuple[float, float]:
-        """Set the paper size; returns the size the driver accepted, in mm."""
-        # The user's current defaults: per-user (level 9), else global (8 / 2).
-        devmode = _first_devmode(self._handle, (9, 8, 2))
+    _require_windows()
+    handle = win32print.OpenPrinter(printer)
+    try:
+        devmode = win32print.GetPrinter(handle, 2)["pDevMode"]
         if devmode is None:
             raise PrintError("the printer driver returned no settings")
-        paper_id = STANDARD_PAPER.get((round(width_mm), round(length_mm)), DMPAPER_USER)
-        devmode.Orientation = DMORIENT_PORTRAIT
-        devmode.PaperSize = paper_id
-        devmode.Fields |= DM_ORIENTATION | DM_PAPERSIZE
-        if paper_id == DMPAPER_USER:
-            devmode.PaperWidth = round(width_mm * 10)     # tenths of a millimetre
-            devmode.PaperLength = round(length_mm * 10)
-            devmode.Fields |= DM_PAPERWIDTH | DM_PAPERLENGTH
-        else:
-            devmode.Fields &= ~(DM_PAPERWIDTH | DM_PAPERLENGTH)
+        paper_id = None
+        if paper is not None:
+            width, length = NAMED_PAPER_MM.get(paper, paper)
+            paper_id = STANDARD_PAPER.get((round(width), round(length)), DMPAPER_USER)
+            devmode.Orientation = DMORIENT_PORTRAIT
+            devmode.PaperSize = paper_id
+            devmode.Fields |= DM_ORIENTATION | DM_PAPERSIZE
+            if paper_id == DMPAPER_USER:
+                devmode.PaperWidth = round(width * 10)     # tenths of a millimetre
+                devmode.PaperLength = round(length * 10)
+                devmode.Fields |= DM_PAPERWIDTH | DM_PAPERLENGTH
+            else:
+                devmode.Fields &= ~(DM_PAPERWIDTH | DM_PAPERLENGTH)
+        devmode.Copies = copies
+        devmode.Collate = DMCOLLATE_TRUE
+        devmode.Fields |= DM_COPIES | DM_COLLATE
         # Let the driver validate the request; it may adjust it to what it supports.
-        win32print.DocumentProperties(None, self._handle, self.printer, devmode, devmode,
+        win32print.DocumentProperties(None, handle, printer, devmode, devmode,
                                       DM_IN_BUFFER | DM_OUT_BUFFER)
-        if devmode.PaperSize != paper_id:
-            raise PrintError(f"the driver does not accept {width_mm:g}×{length_mm:g} mm paper")
-        win32print.SetPrinter(self._handle, 9, {"pDevMode": devmode}, 0)
-        self._changed = True
-        if paper_id == DMPAPER_USER:
-            return devmode.PaperWidth / 10, devmode.PaperLength / 10
-        return width_mm, length_mm
+        if paper_id is not None and devmode.PaperSize != paper_id:
+            raise PrintError(f"the driver does not accept {width:g}×{length:g} mm paper")
+        return devmode
+    finally:
+        win32print.ClosePrinter(handle)
 
-    def __exit__(self, *exc_info) -> bool:
-        try:
-            if self._changed:
-                original = self._original
-                if original is None:  # there were no per-user settings: copy the global ones
-                    original = _first_devmode(self._handle, (8, 2))
-                if original is not None:
-                    win32print.SetPrinter(self._handle, 9, {"pDevMode": original}, 0)
-        except Exception as exc:
-            self.restore_error = exc
-            log.warning("Could not restore settings of %s", self.printer, exc_info=True)
-        finally:
-            win32print.ClosePrinter(self._handle)
-        return False
+
+def place_page(size_mm, sheet_px, offset_px, printable_px, dpi) -> tuple[int, int, int, int, int]:
+    """Where to draw a page on the sheet: (x, y, width, height, rotate) in device pixels,
+    relative to the printable area as GDI expects.
+
+    The page is turned a quarter if its orientation differs from the sheet's,
+    printed at its real size unless that exceeds the printable area (then it is
+    shrunk to fit), and centred on the sheet.
+    """
+    w_mm, h_mm = size_mm
+    sheet_w, sheet_h = sheet_px
+    rotate = 0
+    if (w_mm > h_mm and sheet_w < sheet_h) or (w_mm < h_mm and sheet_w > sheet_h):
+        w_mm, h_mm, rotate = h_mm, w_mm, 1          # 1 = 90° clockwise
+    width, height = w_mm / 25.4 * dpi[0], h_mm / 25.4 * dpi[1]
+    scale = min(1.0, printable_px[0] / width, printable_px[1] / height)
+    width = min(round(width * scale), printable_px[0])
+    height = min(round(height * scale), printable_px[1])
+    x = (sheet_w - width) // 2 - offset_px[0]
+    y = (sheet_h - height) // 2 - offset_px[1]
+    x = max(0, min(x, printable_px[0] - width))
+    y = max(0, min(y, printable_px[1] - height))
+    return x, y, width, height, rotate
 
 
 # ── PDF print programs ───────────────────────────────────────────────────────
@@ -209,14 +207,87 @@ class Backend:
     key = ""
 
     def print_file(self, printer: str, path: str, copies: int = 1,
-                   paper: Optional[str] = None) -> bool:
+                   paper: Optional[Paper] = None) -> bool:
         """Print and return True once the job is known to be in the print queue.
 
-        ``paper`` ("A4" or "A3") asks for that paper instead of the printer's
-        default where the program supports it. False means the job was handed
-        over but could not be confirmed. Raises on failure.
+        ``paper`` asks for that paper instead of the printer's default, where the
+        program supports it. False means the job was handed over but could not be
+        confirmed. Raises on failure.
         """
         raise NotImplementedError
+
+
+class DirectBackend(Backend):
+    """Renders the pages with PDFium straight into a Windows print job (vector output)."""
+    key = "direct"
+
+    def print_file(self, printer, path, copies=1, paper=None):
+        import pypdfium2 as pdfium
+        import pypdfium2.raw as pdfium_c
+
+        from .pdfdocs import read_document
+
+        devmode = job_settings(printer, paper, copies)
+        if isinstance(paper, tuple) and devmode.PaperSize == DMPAPER_USER:
+            devmode = _room_for_margins(printer, paper, copies, devmode)
+        jobs = 1
+        if copies > 1 and devmode.Copies < copies:   # the driver cannot make copies itself
+            jobs, devmode.Copies = copies, 1
+        sizes = {p.index: (p.width_mm, p.height_mm) for p in read_document(path).pages}
+        name = os.path.basename(path)
+        pdf = pdfium.PdfDocument(path)
+        try:
+            for _ in range(jobs):
+                hdc = win32gui.CreateDC("WINSPOOL", printer, devmode)
+                try:
+                    win32print.StartDoc(hdc, (name, None, None, 0))
+                    try:
+                        for index in range(len(pdf)):
+                            page = pdf[index]
+                            try:
+                                size = sizes.get(index) or tuple(v * PT_TO_MM for v in page.get_size())
+                                win32print.StartPage(hdc)
+                                x, y, w, h, rotate = place_page(size, *_sheet_metrics(hdc))
+                                pdfium_c.FPDF_RenderPage(ctypes.c_void_p(hdc), page.raw,
+                                                         x, y, w, h, rotate, RENDER_FLAGS)
+                                win32print.EndPage(hdc)
+                            finally:
+                                page.close()
+                    except BaseException:
+                        win32print.AbortDoc(hdc)
+                        raise
+                    win32print.EndDoc(hdc)
+                finally:
+                    win32gui.DeleteDC(hdc)
+        finally:
+            pdf.close()
+        return True   # EndDoc returns once the job is spooled
+
+
+def _room_for_margins(printer: str, paper: tuple, copies: int, devmode):
+    """Make custom (roll) paper longer by the printer's top and bottom margins,
+    so a page as long as the paper still prints at its real size."""
+    hdc = win32gui.CreateDC("WINSPOOL", printer, devmode)
+    try:
+        (_, sheet_h), _, (_, printable_h), (_, dpi_y) = _sheet_metrics(hdc)
+    finally:
+        win32gui.DeleteDC(hdc)
+    margins_mm = (sheet_h - printable_h) / dpi_y * 25.4
+    if margins_mm < 0.5:
+        return devmode
+    width, length = paper
+    try:
+        return job_settings(printer, (width, length + math.ceil(margins_mm)), copies)
+    except PrintError:   # longer than the driver allows: keep the length, the page shrinks a little
+        return devmode
+
+
+def _sheet_metrics(hdc):
+    caps = lambda index: win32print.GetDeviceCaps(hdc, index)  # noqa: E731
+    return ((caps(PHYSICALWIDTH), caps(PHYSICALHEIGHT)),
+            (caps(PHYSICALOFFSETX), caps(PHYSICALOFFSETY)),
+            (caps(HORZRES), caps(VERTRES)),
+            (caps(LOGPIXELSX), caps(LOGPIXELSY)))
 
 
 class SumatraBackend(Backend):
@@ -229,7 +300,7 @@ class SumatraBackend(Backend):
         settings = []
         if copies > 1:
             settings.append(f"{copies}x")
-        if paper:
+        if paper in NAMED_PAPER_MM:   # SumatraPDF 3.6 knows no custom sizes
             settings.append(f"paper={paper}")
         args = [self.exe, "-print-to", printer, "-silent"]
         if settings:
@@ -272,13 +343,6 @@ class AdobeBackend(_QueueWatchingBackend):
         subprocess.Popen([self.exe, "/h", "/t", path, printer], creationflags=CREATE_NO_WINDOW,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
-
-
-class ShellBackend(_QueueWatchingBackend):
-    key = "shell"
-
-    def _launch(self, printer, path):
-        win32api.ShellExecute(0, "printto", path, f'"{printer}"', os.path.dirname(path), 0)
 
 
 def _registered_app(exe_name: str) -> Optional[str]:
@@ -334,11 +398,14 @@ def find_adobe() -> Optional[str]:
     ])
 
 
-def find_backend() -> Backend:
-    exe = find_sumatra()
-    if exe:
-        return SumatraBackend(exe)
-    exe = find_adobe()
-    if exe:
-        return AdobeBackend(exe)
-    return ShellBackend()
+def find_backend(program: str = "") -> Backend:
+    """The backend for A4/A3 printing: an external program if configured and found, else direct."""
+    if program == "sumatra":
+        exe = find_sumatra()
+        if exe:
+            return SumatraBackend(exe)
+    elif program == "adobe":
+        exe = find_adobe()
+        if exe:
+            return AdobeBackend(exe)
+    return DirectBackend()

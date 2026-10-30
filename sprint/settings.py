@@ -39,12 +39,14 @@ class Settings:
     printer_a3: str = ""
     printer_plotter: str = ""
     language: str = ""          # "" until the user picks one
+    print_program: str = ""     # "" = direct; "sumatra" or "adobe" for A4/A3 pages
 
     _SECTIONS = {
         "printer_a4": ("printers", "a4"),
         "printer_a3": ("printers", "a3"),
         "printer_plotter": ("printers", "plotter"),
         "language": ("ui", "language"),
+        "print_program": ("printing", "program"),
     }
 
     @classmethod

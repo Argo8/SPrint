@@ -103,7 +103,8 @@ class SPrintApp:
 
         _clean_stale_temp_dirs()
         self.temp_dir = tempfile.mkdtemp(prefix=TEMP_PREFIX)
-        self.backend = printing.find_backend()
+        self.backend = printing.find_backend(self.settings.print_program)
+        self.plot_backend = printing.DirectBackend()
 
         self.var_a4 = tk.StringVar()
         self.var_a3 = tk.StringVar()
@@ -122,6 +123,9 @@ class SPrintApp:
         root.report_callback_exception = self._on_tk_error
         threading.Thread(target=self._analysis_worker, name="analysis", daemon=True).start()
         root.after(50, self._drain_ui_calls)
+        program = self.settings.print_program
+        if program and program != self.backend.key:
+            self.log(t("program_missing", program=program), "warn")
         self.log(t(f"backend_{self.backend.key}"))
         logger.info("SPrint %s, print program: %s", __version__,
                     getattr(self.backend, "exe", self.backend.key))
@@ -522,7 +526,7 @@ class SPrintApp:
         for combo in self.comboboxes:
             combo.configure(values=self.printers)
         saved = (self.settings.printer_a4, self.settings.printer_a3, self.settings.printer_plotter)
-        for var, name in zip((self.var_a4, self.var_a3, self.var_plotter), saved):
+        for var, name in zip((self.var_a4, self.var_a3, self.var_plotter), saved, strict=True):
             if name:
                 var.set(name)
                 if name not in self.printers:
@@ -584,7 +588,8 @@ class SPrintApp:
     def _start_job(self, func, target: str, printer: str) -> None:
         if self.job is not None:
             return
-        ctx = jobs.JobContext(self.backend, self.temp_dir, self.log, cancel=self.cancel)
+        ctx = jobs.JobContext(self.backend, self.plot_backend, self.temp_dir, self.log,
+                              cancel=self.cancel)
         args = (ctx, target, printer, self._copies(), list(self.paths))
 
         def run():
@@ -765,6 +770,15 @@ def main(argv: list[str] | None = None) -> None:
                 root.after(200, finish)
                 return
             failed.extend(doc.name for doc in app.docs.values() if not doc.ok)
+            try:   # the page renderer used for printing must be bundled too
+                import pypdfium2 as pdfium
+                for path in app.paths[:1]:
+                    pdf = pdfium.PdfDocument(path)
+                    pdf[0].render(scale=0.1)
+                    pdf.close()
+            except Exception:
+                logger.exception("PDF renderer failed")
+                failed.append("PDF renderer")
             logger.info("Smoke test: %d files read, failed: %s", len(app.docs), failed or "none")
             app._on_close()
         root.after(1000, finish)

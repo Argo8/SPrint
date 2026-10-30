@@ -18,35 +18,12 @@ class FakeBackend(printing.Backend):
         return True
 
 
-class FakePaper:
-    instances = []
-
-    def __init__(self, printer):
-        self.printer = printer
-        self.applied = []
-        self.restored = False
-        self.restore_error = None
-        FakePaper.instances.append(self)
-
-    def __enter__(self):
-        return self
-
-    def apply(self, width, length):
-        self.applied.append((width, length))
-        return width, length
-
-    def __exit__(self, *exc):
-        self.restored = True
-        return False
-
-
 @pytest.fixture
 def ctx(tmp_path):
-    FakePaper.instances = []
     messages = []
-    context = jobs.JobContext(FakeBackend(), str(tmp_path),
+    context = jobs.JobContext(FakeBackend(), FakeBackend(), str(tmp_path),
                               lambda m, level="info": messages.append((level, m)),
-                              paper_cls=FakePaper, printer_exists=lambda name: name != "Gone")
+                              printer_exists=lambda name: name != "Gone")
     context.messages = messages
     return context
 
@@ -87,14 +64,13 @@ def test_plot_groups_by_length_and_collates_copies(ctx, make_pdf):
     b = make_pdf("b.pdf", [(210, 297), (841, 594), (600, 1000)])
     sent = jobs.plot(ctx, "610", "Plotter", 2, [a, b])
     assert sent == 3
-    paper = FakePaper.instances[0]
-    assert paper.applied == [(610, 1000), (610, 841)]
-    assert paper.restored
-    assert ctx.backend.calls == [
-        ("Plotter", "b [610x1000].pdf", 1), ("Plotter", "b [610x1000].pdf", 1),
-        ("Plotter", "a.pdf", 1), ("Plotter", "b [610x841].pdf", 1),
-        ("Plotter", "a.pdf", 1), ("Plotter", "b [610x841].pdf", 1),
+    long, short = (610, 1000), (610, 841)
+    assert ctx.plot_backend.calls == [
+        ("Plotter", "b [610x1000].pdf", 1, long), ("Plotter", "b [610x1000].pdf", 1, long),
+        ("Plotter", "a.pdf", 1, short), ("Plotter", "b [610x841].pdf", 1, short),
+        ("Plotter", "a.pdf", 1, short), ("Plotter", "b [610x841].pdf", 1, short),
     ]
+    assert ctx.backend.calls == []
 
 
 def test_plot_requires_roll(ctx, make_pdf):
@@ -105,27 +81,28 @@ def test_plot_requires_roll(ctx, make_pdf):
 def test_plot_without_matching_pages(ctx, make_pdf):
     assert jobs.plot(ctx, "914", "Plotter", 1, [make_pdf("a.pdf", [(594, 841)])]) == 0
     assert ctx.messages[-1] == ("warn", "No pages for roll 914 mm.")
-    assert FakePaper.instances == []
+    assert ctx.plot_backend.calls == []
 
 
-def test_plot_continues_when_paper_size_cannot_be_set(ctx, make_pdf):
-    class BrokenPaper(FakePaper):
-        def __enter__(self):
-            raise OSError("access denied")
-    ctx.paper_cls = BrokenPaper
-    assert jobs.plot(ctx, "A3", "Plotter", 1, [make_pdf("a.pdf", [(297, 420)])]) == 1
-    assert any("access denied" in m for _, m in ctx.messages)
+def test_plot_a3_sheets(ctx, make_pdf):
+    assert jobs.plot(ctx, "A3", "Plotter", 1, [make_pdf("a.pdf", [(297, 420), (420, 297)])]) == 2
+    assert ctx.plot_backend.calls == [("Plotter", "a.pdf", 1, (297, 420))]
 
 
-def test_cancel_stops_and_restores_paper(ctx, make_pdf):
+def test_plot_reports_rejected_paper(ctx, make_pdf):
+    ctx.plot_backend.fail_on = ("a.pdf",)
+    assert jobs.plot(ctx, "610", "Plotter", 1, [make_pdf("a.pdf", [(594, 841)])]) == 0
+    assert ("error", "  Error sending a.pdf: printer jammed") in ctx.messages
+
+
+def test_cancel_stops_plotting(ctx, make_pdf):
     paths = [make_pdf(f"{n}.pdf", [(594, 841)]) for n in "abc"]
 
     class CancellingBackend(FakeBackend):
         def print_file(self, printer, path, copies=1, paper=None):
             ctx.cancel.set()
             return super().print_file(printer, path, copies, paper)
-    ctx.backend = CancellingBackend()
+    ctx.plot_backend = CancellingBackend()
     assert jobs.plot(ctx, "610", "Plotter", 1, paths) == 1
-    assert len(ctx.backend.calls) == 1
-    assert FakePaper.instances[0].restored
+    assert len(ctx.plot_backend.calls) == 1
     assert ctx.messages[-1] == ("warn", "Printing stopped.")

@@ -17,8 +17,9 @@ SPrint reads the size of every page and sends it to the right device:
 Sizes within 3 mm of A4/A3 count as A4/A3 (scanners and PDF printers rarely produce exact sizes).
 The visible page area is used (crop box, `/Rotate`, `/UserUnit`), i.e. what a PDF viewer shows and prints.
 
-For the plotter you choose the roll that is loaded. SPrint groups that roll's pages by length and, before each group,
-sets the plotter's paper size to *roll width × page length*; afterwards your previous plotter settings are restored.
+For the plotter you choose the roll that is loaded. SPrint groups that roll's pages by length and prints each group
+on paper of *roll width × page length* (a few millimetres longer if the plotter needs room for its margins, so drawings
+print at 1:1). The paper size travels with each print job, so the plotter's own settings are never changed.
 
 ## Features
 
@@ -27,25 +28,31 @@ sets the plotter's paper size to *roll width × page length*; afterwards your pr
 - Summary of page sizes per file and in total, with warnings for unreadable files and pages wider than the widest roll
 - Automatic paper length on the plotter, printed groups marked with ✓
 - Number of copies (plotter copies are collated per paper length)
-- Files whose pages all go to one printer are printed unchanged (layers, forms and annotations are kept);
-  otherwise only the needed pages are extracted, keeping CAD layer visibility
+- Prints by itself with the built-in PDF renderer (PDFium, the engine of Google Chrome) — no Adobe Reader needed
+- Landscape pages are turned to fit the paper; pages larger than the printable area are shrunk, smaller ones are not enlarged
+- Only the needed pages of a file are printed; CAD layer visibility is kept
 - Printing runs in the background — the window never freezes and can show progress; closing while printing
   stops after the current file
 - Remembers the selected printers and language
 - English / Croatian interface (Croatian by default on Croatian Windows)
 - Log file for troubleshooting
 
-## Printing program
+## How SPrint prints
 
-SPrint hands the PDF files to a PDF program, using the first one it finds:
+SPrint renders the pages itself (PDFium) straight into a Windows print job that carries its own paper size, copies and
+orientation. Your printing preferences (tray, duplex, colour, quality) still apply; nothing in the printer's settings is
+changed. This is what makes custom plot lengths possible.
 
-1. **[SumatraPDF](https://www.sumatrapdfreader.org/)** (free, recommended) — prints silently, reports errors, supports copies
-   and picks the printer's matching paper size (e.g. *ISO A1* on a plotter) by itself; for other sizes SPrint's paper setting applies.
-   Install it, or put `SumatraPDF.exe` (the portable version works too) next to `SPrint.exe`.
-2. **Adobe Acrobat / Acrobat Reader** — leaves Reader open in the background; SPrint watches the print queue to pace jobs.
-3. The default PDF app via Windows "print to" (not every PDF app supports it; Microsoft Edge does not).
+The A4/A3 printers can use an external PDF program instead — add to `%APPDATA%\SPrint\settings.ini`:
 
-The program in use is shown in the log when SPrint starts.
+```ini
+[printing]
+program = sumatra
+```
+
+`sumatra` uses [SumatraPDF](https://www.sumatrapdfreader.org/) (installed, or `SumatraPDF.exe` next to `SPrint.exe`),
+`adobe` uses Adobe Acrobat / Acrobat Reader. The plotter always prints directly, because neither program can set a
+custom paper length (SumatraPDF 3.6 ignores it, Adobe Reader takes it only from the printer's default settings).
 
 ## Running
 
@@ -91,7 +98,7 @@ The tests of the page-size logic run on any OS; the printer tests run only on Wi
 
 | Location | Content |
 |---|---|
-| `%APPDATA%\SPrint\settings.ini` | selected printers and language (older `printer_choices.ini` is imported once) |
+| `%APPDATA%\SPrint\settings.ini` | selected printers, language, optional print program (older `printer_choices.ini` is imported once) |
 | `%APPDATA%\SPrint\sprint.log` | log for troubleshooting |
 | `%TEMP%\SPrint_*` | temporary PDFs with extracted pages, deleted on exit |
 
@@ -104,7 +111,7 @@ The tests of the page-size logic run on any OS; the printer tests run only on Wi
 | `sprint/jobs.py` | print and plot workflows |
 | `sprint/paper.py` | page-size classification, rolls, grouping (pure logic) |
 | `sprint/pdfdocs.py` | reading page sizes, extracting pages (`pypdf`) |
-| `sprint/printing.py` | Windows printers, plotter paper size, PDF print programs |
+| `sprint/printing.py` | Windows printers, print jobs with their own paper size, external PDF programs |
 | `sprint/settings.py` | settings file |
 | `sprint/i18n.py` | English and Croatian texts |
 | `tests/` | automated tests |
@@ -138,8 +145,9 @@ SPrint očita veličinu svake stranice i šalje je na odgovarajući uređaj:
 Veličine do 3 mm odstupanja od A4/A3 smatraju se A4/A3 (skeneri i PDF printeri rijetko daju točne mjere).
 Koristi se vidljivi dio stranice (crop box, `/Rotate`, `/UserUnit`), tj. ono što PDF preglednik prikazuje i ispisuje.
 
-Za ploter odaberete rolu koja je umetnuta. SPrint grupira stranice te role po dužini i prije svake grupe
-postavi veličinu papira na ploteru na *širina role × dužina stranice*; nakon ispisa vraća prethodne postavke plotera.
+Za ploter odaberete rolu koja je umetnuta. SPrint grupira stranice te role po dužini i svaku grupu ispisuje na papir
+*širina role × dužina stranice* (nekoliko milimetara dulji ako ploteru treba mjesta za margine, tako da se crteži ispisuju
+u mjerilu 1:1). Veličina papira putuje sa svakim poslom ispisa, pa se postavke samog plotera nikad ne mijenjaju.
 
 ## Značajke
 
@@ -148,25 +156,31 @@ postavi veličinu papira na ploteru na *širina role × dužina stranice*; nakon
 - Pregled veličina stranica po datoteci i ukupno, s upozorenjima za nečitljive datoteke i stranice šire od najšire role
 - Automatska dužina papira na ploteru, isplotane grupe označene s ✓
 - Broj kopija (kopije na ploteru slažu se po dužini papira)
-- Datoteke kojima sve stranice idu na isti printer šalju se nepromijenjene (slojevi, obrasci i komentari ostaju);
-  inače se izdvajaju samo potrebne stranice, uz očuvanu vidljivost CAD slojeva
+- Ispisuje sam, ugrađenim PDF prikazom (PDFium, pogon Google Chromea) — Adobe Reader nije potreban
+- Položene stranice okreću se prema papiru; stranice veće od područja ispisa se smanjuju, manje se ne povećavaju
+- Ispisuju se samo potrebne stranice datoteke; vidljivost CAD slojeva ostaje očuvana
 - Ispis radi u pozadini — prozor se ne zamrzava i prikazuje napredak; zatvaranje tijekom ispisa
   zaustavlja ispis nakon trenutne datoteke
 - Pamćenje odabranih printera i jezika
 - Sučelje na engleskom / hrvatskom (na hrvatskim Windowsima hrvatski je zadani)
 - Datoteka zapisa (log) za otklanjanje problema
 
-## Program za ispis
+## Kako SPrint ispisuje
 
-SPrint PDF datoteke predaje PDF programu, prvom koji pronađe:
+SPrint sam iscrtava stranice (PDFium) izravno u Windows posao ispisa koji nosi vlastitu veličinu papira, broj kopija i
+orijentaciju. Vaše postavke ispisa (ladica, obostrani ispis, boja, kvaliteta) i dalje vrijede; postavke printera se ne
+mijenjaju. Upravo to omogućuje proizvoljne dužine papira na ploteru.
 
-1. **[SumatraPDF](https://www.sumatrapdfreader.org/)** (besplatan, preporučeno) — ispisuje tiho, javlja greške, podržava kopije
-   i sam odabire odgovarajući format papira na printeru (npr. *ISO A1* na ploteru); za ostale veličine vrijedi postavka papira iz SPrinta.
-   Instalirajte ga ili stavite `SumatraPDF.exe` (radi i prijenosna verzija) pokraj `SPrint.exe`.
-2. **Adobe Acrobat / Acrobat Reader** — Reader ostaje otvoren u pozadini; SPrint prati red ispisa da ne zagušuje printer.
-3. Zadana PDF aplikacija preko Windows naredbe "print to" (ne podržava je svaka aplikacija; Microsoft Edge ne).
+A4/A3 printeri mogu umjesto toga koristiti vanjski PDF program — dodajte u `%APPDATA%\SPrint\settings.ini`:
 
-Program koji se koristi ispisuje se u zapisu radnji pri pokretanju.
+```ini
+[printing]
+program = sumatra
+```
+
+`sumatra` koristi [SumatraPDF](https://www.sumatrapdfreader.org/) (instaliran ili `SumatraPDF.exe` pokraj `SPrint.exe`),
+`adobe` koristi Adobe Acrobat / Acrobat Reader. Ploter uvijek ispisuje izravno jer nijedan od tih programa ne može zadati
+proizvoljnu dužinu papira (SumatraPDF 3.6 je zanemaruje, Adobe Reader je uzima samo iz zadanih postavki printera).
 
 ## Pokretanje
 
@@ -212,7 +226,7 @@ Testovi logike veličina stranica rade na svakom OS-u; testovi printera samo na 
 
 | Lokacija | Sadržaj |
 |---|---|
-| `%APPDATA%\SPrint\settings.ini` | odabrani printeri i jezik (stari `printer_choices.ini` uvozi se jednom) |
+| `%APPDATA%\SPrint\settings.ini` | odabrani printeri, jezik, po želji program za ispis (stari `printer_choices.ini` uvozi se jednom) |
 | `%APPDATA%\SPrint\sprint.log` | zapis za otklanjanje problema |
 | `%TEMP%\SPrint_*` | privremeni PDF-ovi s izdvojenim stranicama, brišu se pri zatvaranju |
 
