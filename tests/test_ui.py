@@ -1,6 +1,7 @@
 """The window, driven like a user would, with fake printers (Qt offscreen)."""
 
 import os
+import threading
 
 import pytest
 
@@ -233,10 +234,14 @@ def test_changed_file_is_read_again(qtbot, window, make_pdf):
 def test_single_instance_hands_over_paths(qtbot):
     from sprint.single_instance import SingleInstance
     name = f"SPrint-test-{os.getpid()}"
-    received = []
+    received, sent = [], []
     server = SingleInstance(name)
     server.listen(received.extend)
-    assert SingleInstance(name).send(["a.pdf", "b.pdf"])
+    # the second start is another program: here another thread, while this one runs the window's events
+    second = threading.Thread(target=lambda: sent.append(SingleInstance(name).send(["a.pdf", "b.pdf"])))
+    second.start()
     qtbot.waitUntil(lambda: len(received) == 2)
+    second.join(5)
+    assert sent == [True]
     assert [os.path.basename(p) for p in received] == ["a.pdf", "b.pdf"]
     assert not SingleInstance(name + "-none").send(["x.pdf"])
