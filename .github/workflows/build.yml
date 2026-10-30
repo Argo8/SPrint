@@ -93,14 +93,34 @@ jobs:
           if ($LASTEXITCODE) { throw "ISCC failed with $LASTEXITCODE" }
           "SPRINT_VERSION=$version" >> $env:GITHUB_ENV
 
-      - name: Install, start and uninstall SPrint
+      - name: Install over the latest release, start and uninstall SPrint
         shell: pwsh
         timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $setup = Start-Process "dist\SPrint-Setup-$env:SPRINT_VERSION.exe" -PassThru -Wait `
-            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/TASKS=sendto'
-          if ($setup.ExitCode -ne 0) { throw "setup exited with $($setup.ExitCode)" }
+          function Install-SPrint($setup) {
+            $run = Start-Process $setup -PassThru -Wait `
+              -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/TASKS=sendto'
+            if ($run.ExitCode -ne 0) { throw "$setup exited with $($run.ExitCode)" }
+          }
           $dir = "$env:LOCALAPPDATA\Programs\SPrint"
+          # Most people update: install the latest release first, then this version over it.
+          gh release download --repo $env:GITHUB_REPOSITORY --pattern 'SPrint-Setup-*.exe' --dir previous
+          if ($LASTEXITCODE -eq 0) {
+            $previous = Get-ChildItem previous -Filter 'SPrint-Setup-*.exe' | Select-Object -First 1
+            Install-SPrint $previous.FullName
+            "Installed $($previous.Name) first"
+          } else {
+            Write-Warning "no earlier release to update from"
+          }
+          $global:LASTEXITCODE = 0
+          Install-SPrint "dist\SPrint-Setup-$env:SPRINT_VERSION.exe"
+          # nothing of the earlier version may stay behind: Python would still load it
+          $built = Get-ChildItem dist\SPrint -Recurse -File | ForEach-Object { $_.FullName.Substring((Resolve-Path dist\SPrint).Path.Length) }
+          $left = Get-ChildItem $dir -Recurse -File | ForEach-Object { $_.FullName.Substring($dir.Length) } |
+            Where-Object { $_ -notin $built -and $_ -notlike '\unins*' }
+          if ($left) { throw "left over from the earlier version: $($left -join ', ')" }
           $shortcuts = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SPrint.lnk", "$env:APPDATA\Microsoft\Windows\SendTo\SPrint.lnk"
           foreach ($path in @("$dir\SPrint.exe") + $shortcuts) {
             if (-not (Test-Path $path)) { throw "not installed: $path" }
