@@ -129,6 +129,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4   # for .github/release-notes.md
       - uses: actions/download-artifact@v4
         with:
           pattern: SPrint-*
@@ -136,6 +137,7 @@ jobs:
       - name: Create release with the installer and the portable version
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release create "$GITHUB_REF_NAME" SPrint-Setup-*.exe SPrint-portable-*.zip
-          --repo "$GITHUB_REPOSITORY" --title "SPrint $GITHUB_REF_NAME" --generate-notes
+        run: |
+          notes=$(sed "s/{version}/${GITHUB_REF_NAME#v}/g" .github/release-notes.md)
+          gh release create "$GITHUB_REF_NAME" SPrint-Setup-*.exe SPrint-portable-*.zip \
+            --repo "$GITHUB_REPOSITORY" --title "SPrint $GITHUB_REF_NAME" --notes "$notes" --generate-notes
