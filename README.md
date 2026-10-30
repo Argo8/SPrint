@@ -166,7 +166,7 @@ Python ni ništa drugo nije potrebno.
 
 1. Preuzmite **`SPrint-Setup-<verzija>.exe`** iz [Releases](../../releases)
    (ili iz artefakata zadnjeg uspješnog [*Build* pokretanja](../../actions/workflows/build.yml)).
-2. Pokrenite ga. *Instalacija samo za mene* ne traži administratorska prava; *za sve korisnike* instalira u Program Files.
+2. Pokrenite ga. Instalacija samo za sebe ne traži administratorska prava; instalacija za sve korisnike stavlja SPrint u Program Files.
 3. SPrint pokrenite iz izbornika Start. Instalacija po želji dodaje ikonu na radnu površinu i stavku u izborniku
    *Pošalji u* u Exploreru (označite PDF datoteke ili mape → desni klik → *Pošalji u* → SPrint).
 
