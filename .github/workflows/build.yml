@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: Publish a release (tag v<version from sprint/__init__.py>) when the build succeeds
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -123,7 +128,7 @@ jobs:
 
   release:
     name: Publish release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release
     needs: [tests-linux, windows]
     runs-on: ubuntu-latest
     permissions:
@@ -138,6 +143,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes=$(sed "s/{version}/${GITHUB_REF_NAME#v}/g" .github/release-notes.md)
-          gh release create "$GITHUB_REF_NAME" SPrint-Setup-*.exe SPrint-portable-*.zip \
-            --repo "$GITHUB_REPOSITORY" --title "SPrint $GITHUB_REF_NAME" --notes "$notes" --generate-notes
+          # a pushed tag already exists; from "Run workflow" the tag is created on this commit
+          tag="v$(python3 -c 'import sprint; print(sprint.__version__)')"
+          notes=$(sed "s/{version}/${tag#v}/g" .github/release-notes.md)
+          gh release create "$tag" SPrint-Setup-*.exe SPrint-portable-*.zip --target "$GITHUB_SHA" \
+            --repo "$GITHUB_REPOSITORY" --title "SPrint $tag" --notes "$notes" --generate-notes
