@@ -1105,6 +1105,7 @@ class MainWindow(QMainWindow):
 
     def open_settings(self) -> None:
         self.drawer.open_drawer()
+        self.toast.raise_()   # a message still showing stays readable above the drawer
 
     def _toggle_theme(self) -> None:
         self.set_theme(theme.LIGHT if colors().dark else theme.DARK)
