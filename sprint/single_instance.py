@@ -12,7 +12,8 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 log = logging.getLogger(__name__)
 
-TIMEOUT_MS = 600
+CONNECT_MS = 1000
+HANDOVER_MS = 3000   # a busy window may take a moment to read
 
 
 class SingleInstance:
@@ -21,10 +22,10 @@ class SingleInstance:
         self.server = None
 
     def send(self, paths: list[str]) -> bool:
-        """Pass ``paths`` to a running SPrint; False if there is none."""
+        """Pass ``paths`` to a running SPrint; False if there is none (or it did not take them)."""
         socket = QLocalSocket()
         socket.connectToServer(self.name)
-        if not socket.waitForConnected(TIMEOUT_MS):
+        if not socket.waitForConnected(CONNECT_MS):
             return False
         if os.name == "nt":   # let the running window come to the front
             try:
@@ -33,10 +34,12 @@ class SingleInstance:
             except Exception:
                 pass
         socket.write(json.dumps([os.path.abspath(p) for p in paths]).encode("utf-8") + b"\n")
-        socket.waitForBytesWritten(TIMEOUT_MS)
+        if not socket.waitForBytesWritten(HANDOVER_MS):   # not taken: open a window of our own
+            socket.abort()
+            return False
         # The window closes the connection once it has the paths; leaving earlier could lose them.
         if socket.state() == QLocalSocket.LocalSocketState.ConnectedState:
-            socket.waitForDisconnected(TIMEOUT_MS)
+            socket.waitForDisconnected(HANDOVER_MS)
         socket.disconnectFromServer()
         return True
 

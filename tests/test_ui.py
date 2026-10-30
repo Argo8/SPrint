@@ -1,7 +1,8 @@
 """The window, driven like a user would, with fake printers (Qt offscreen)."""
 
 import os
-import threading
+import subprocess
+import sys
 
 import pytest
 
@@ -234,14 +235,16 @@ def test_changed_file_is_read_again(qtbot, window, make_pdf):
 def test_single_instance_hands_over_paths(qtbot):
     from sprint.single_instance import SingleInstance
     name = f"SPrint-test-{os.getpid()}"
-    received, sent = [], []
+    received = []
     server = SingleInstance(name)
     server.listen(received.extend)
-    # the second start is another program: here another thread, while this one runs the window's events
-    second = threading.Thread(target=lambda: sent.append(SingleInstance(name).send(["a.pdf", "b.pdf"])))
-    second.start()
-    qtbot.waitUntil(lambda: len(received) == 2)
-    second.join(5)
-    assert sent == [True]
+    # the second start is another program, as when "Send to" starts SPrint again
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); from PySide6.QtCore import QCoreApplication; "
+            "app = QCoreApplication([]); from sprint.single_instance import SingleInstance; "
+            "sys.exit(0 if SingleInstance(sys.argv[2]).send(['a.pdf', 'b.pdf']) else 1)")
+    second = subprocess.Popen([sys.executable, "-c", code, root, name])
+    qtbot.waitUntil(lambda: len(received) == 2, timeout=20000)
+    assert second.wait(20) == 0
     assert [os.path.basename(p) for p in received] == ["a.pdf", "b.pdf"]
     assert not SingleInstance(name + "-none").send(["x.pdf"])
