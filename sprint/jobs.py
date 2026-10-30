@@ -32,7 +32,7 @@ class Printers:
 
 @dataclass
 class Job:
-    """What one press of the print button sends."""
+    """What one press of a print button sends: the pages of one destination."""
     a4: list[Part]
     a3: list[Part]
     plot: list[PlotRun]
@@ -42,10 +42,14 @@ class Job:
     duplex_a3: Optional[bool] = None
 
     @classmethod
-    def from_plan(cls, plan: Plan, printers: Printers, copies: int = 1,
-                  duplex_a4: Optional[bool] = None, duplex_a3: Optional[bool] = None) -> "Job":
-        return cls(plan.a4_parts, plan.a3_parts, plan.plot_runs, printers, copies,
-                   duplex_a4, duplex_a3)
+    def from_plan(cls, plan: Plan, dest: str, printers: Printers, copies: int = 1,
+                  duplex: Optional[bool] = None) -> "Job":
+        return cls(plan.a4_parts if dest == A4_DEST else [],
+                   plan.a3_parts if dest == A3_DEST else [],
+                   plan.plot_runs if dest == PLOT_DEST else [],
+                   printers, copies,
+                   duplex if dest == A4_DEST else None,
+                   duplex if dest == A3_DEST else None)
 
     def pages(self, dest: str) -> int:
         if dest == PLOT_DEST:

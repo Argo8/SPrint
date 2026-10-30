@@ -6,6 +6,7 @@ paint. Animations are short (150-400 ms) with an ease-out curve.
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from PySide6.QtCore import (QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRectF,
@@ -592,6 +593,7 @@ def paint_page(p: QPainter, rect: QRectF, kind: str, skipped: bool,
         p.setBrush(QColor("#FFFFFF"))
         p.drawRoundedRect(rect, 2, 2)
         p.save()
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         clip = QPainterPath()
         clip.addRoundedRect(rect, 2, 2)
         p.setClipPath(clip)
@@ -609,7 +611,7 @@ def paint_page(p: QPainter, rect: QRectF, kind: str, skipped: bool,
 
 
 class PageShape(QWidget):
-    """The first page of a file, as a small outline (or picture) in its colour."""
+    """The first page of a file: its picture, or an outline in its colour until that is made."""
 
     def __init__(self, box: int = 36, parent=None):
         super().__init__(parent)
@@ -627,6 +629,10 @@ class PageShape(QWidget):
     def set_picture(self, picture: Optional[QPixmap]) -> None:
         self.picture = picture
         self.update()
+
+    def picture_px(self) -> int:
+        """The picture's long side in pixels, to be sharp on this screen."""
+        return math.ceil(self.box * self.devicePixelRatioF())
 
     def paintEvent(self, _event):
         p = QPainter(self)
@@ -660,6 +666,13 @@ class PageTile(HoverButton):
         self.picture = picture
         self.update()
 
+    def box(self) -> float:
+        """Larger formats get a larger picture (40 px for A3 and smaller, 62 px for A0)."""
+        return 40 + 22 * max(0.0, min(1.0, (max(self.size_mm) - 297) / (1189 - 297)))
+
+    def picture_px(self) -> int:
+        return math.ceil(self.box() * self.devicePixelRatioF())
+
     def paintEvent(self, _event):
         c = colors()
         p = QPainter(self)
@@ -671,9 +684,7 @@ class PageTile(HoverButton):
         p.setBrush(blend(c.surface2, c.surface, h))
         p.drawRoundedRect(rect, 12, 12)
         p.setOpacity(0.55 if self.skipped else (1.0 if self.isEnabled() else 0.6))
-        long_side = max(self.size_mm)
-        box = 40 + 22 * max(0.0, min(1.0, (long_side - 297) / (1189 - 297)))
-        size = page_box(*self.size_mm, box)
+        size = page_box(*self.size_mm, self.box())
         area = QRectF(rect.left(), rect.top() + 6, rect.width(), 66)
         page = QRectF(area.center().x() - size.width() / 2, area.center().y() - size.height() / 2,
                       size.width(), size.height())
@@ -699,72 +710,138 @@ class PageTile(HoverButton):
         self.focus_ring(p, rect, 12)
 
 
-# ── Print button ─────────────────────────────────────────────────────────────
+# ── Print buttons ────────────────────────────────────────────────────────────
 
-class PrintButton(HoverButton):
-    """The big button: what will be printed, in two lines."""
+class ActionButton(HoverButton):
+    """A card's print button: icon and text on its destination's colour. When it
+    cannot be pressed it turns grey and its text says why."""
 
-    def __init__(self, parent=None):
+    def __init__(self, role: str = "accent", parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(66)
+        self.role = role                 # "accent" or "plot"
+        self.icon_name = "printer"
+        self.setFixedHeight(44)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.title = ""
-        self.sub = ""
-        self.shortcut_text = "Ctrl+P"
 
-    def set_texts(self, title: str, sub: str) -> None:
-        self.title, self.sub = title, sub
-        self.setAccessibleName(f"{title}. {sub}")
-        self.update()
+    def set_content(self, text: str, icon: str = "printer") -> None:
+        if (text, icon) != (self.text(), self.icon_name):
+            self.setText(text)
+            self.setAccessibleName(text)
+            self.icon_name = icon
+            self.update()
 
     def paintEvent(self, _event):
         c = colors()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        enabled = self.isEnabled()
-        fill = (blend(c.accent, c.accent_hover, self.hover.value) if enabled
-                else blend(c.surface, c.accent, .42))
-        if self.isDown():
-            fill = fill.darker(108)
-        p.setPen(Qt.PenStyle.NoPen)
+        if self.isEnabled():
+            base = QColor(c.plot_strong if self.role == "plot" else c.accent)
+            fill = blend(base.name(), base.darker(118).name(), self.hover.value)
+            if self.isDown():
+                fill = fill.darker(108)
+            p.setPen(Qt.PenStyle.NoPen)
+            ink = "#FFFFFF"
+        else:
+            fill = QColor(c.surface2)
+            p.setPen(QPen(QColor(c.border), 1))
+            ink = c.muted
         p.setBrush(fill)
-        p.drawRoundedRect(rect, 14, 14)
-        ink = QColor("#FFFFFF")
-        box = QRectF(rect.left() + 14, rect.center().y() - 20, 40, 40)
-        p.setBrush(color("#FFFFFF", .16))
-        p.drawRoundedRect(box, 12, 12)
-        p.drawPixmap(box.adjusted(10, 10, -10, -10).toRect(), icons.pixmap("printer", "#FFFFFF", 20))
-        right = rect.right() - 14
-        if enabled and self.shortcut_text and rect.width() > 330:
-            p.setFont(font(8.5, True))
-            width = QFontMetrics(p.font()).horizontalAdvance(self.shortcut_text) + 16
-            chip = QRectF(right - width, rect.center().y() - 11, width, 22)
-            p.setBrush(color("#FFFFFF", .16))
-            p.drawRoundedRect(chip, 6, 6)
-            p.setPen(ink)
-            p.drawText(chip, Qt.AlignmentFlag.AlignCenter, self.shortcut_text)
-            right = chip.left() - 8
-        text = QRectF(box.right() + 14, rect.top(), right - box.right() - 14, rect.height())
-        p.setPen(ink)
-        p.setFont(font(12.5, True))
+        p.drawRoundedRect(rect, 10, 10)
+        p.setFont(font(10.5, True))
         metrics = QFontMetrics(p.font())
-        p.drawText(QRectF(text.left(), rect.center().y() - 21, text.width(), 22),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   metrics.elidedText(self.title, Qt.TextElideMode.ElideRight, int(text.width())))
-        p.setFont(font(9))
-        metrics = QFontMetrics(p.font())
-        p.setPen(color("#FFFFFF", .9))
-        p.drawText(QRectF(text.left(), rect.center().y() + 1, text.width(), 20),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   metrics.elidedText(self.sub, Qt.TextElideMode.ElideRight, int(text.width())))
-        if self.hasFocus() and self.property("focusvisible"):
-            p.setPen(QPen(QColor(c.text), 2))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRoundedRect(rect.adjusted(-0.5, -0.5, 0.5, 0.5), 15, 15)
+        icon, gap = 18, 8
+        text = metrics.elidedText(self.text(), Qt.TextElideMode.ElideRight, int(rect.width()) - 28 - icon - gap)
+        width = icon + gap + metrics.horizontalAdvance(text)
+        x = rect.center().x() - width / 2
+        p.drawPixmap(QRectF(x, rect.center().y() - icon / 2, icon, icon).toRect(),
+                     icons.pixmap(self.icon_name, ink, icon))
+        p.setPen(QColor(ink))
+        p.drawText(QRectF(x + icon + gap, rect.top(), width - icon - gap + 4, rect.height()),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+        self.focus_ring(p, rect, 10)
 
 
 # ── Overlays ─────────────────────────────────────────────────────────────────
+
+class PreviewPopup(QWidget):
+    """A large picture of a page, shown beside the small one the mouse rests on."""
+    PAD, CAPTION, SHADOW = 12, 34, 10
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.picture: Optional[QPixmap] = None
+        self.page_size = QSize(100, 141)
+        self.title = ""
+        self.detail = ""
+        self.spinner = Spinner(16, self)
+        self._effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._effect)
+        self._fade = QPropertyAnimation(self._effect, b"opacity", self)
+        self._fade.setDuration(150)
+        self._fade.setEasingCurve(EASE)
+        self.hide()
+
+    def show_page(self, picture: Optional[QPixmap], page_size: QSize, title: str, detail: str,
+                  loading: bool) -> None:
+        self.picture, self.page_size, self.title, self.detail = picture, page_size, title, detail
+        edge = self.SHADOW + self.PAD
+        self.resize(page_size.width() + 2 * edge, page_size.height() + 2 * edge + self.CAPTION)
+        self.spinner.setVisible(loading)
+        self.spinner.move(edge + page_size.width() - self.spinner.width() - 10, edge + 10)
+        self.update()
+
+    def set_picture(self, picture: QPixmap) -> None:
+        self.picture = picture
+        self.spinner.hide()
+        self.update()
+
+    def appear(self) -> None:
+        self.raise_()
+        if self.isVisible():
+            return
+        self._effect.setOpacity(0.0)
+        self.show()
+        self._fade.stop()
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._fade.start()
+
+    def paintEvent(self, _event):
+        c = colors()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        card_rect = QRectF(self.rect()).adjusted(self.SHADOW, self.SHADOW, -self.SHADOW, -self.SHADOW)
+        p.setPen(Qt.PenStyle.NoPen)
+        for step in range(1, self.SHADOW + 1):   # soft shadow, darker near the card
+            p.setBrush(QColor(15, 23, 42, round(14 * (1 - step / (self.SHADOW + 1)))))
+            p.drawRoundedRect(card_rect.adjusted(-step, -step + 3, step, step + 3), 14 + step, 14 + step)
+        p.setPen(QPen(QColor(c.border), 1))
+        p.setBrush(QColor(c.surface))
+        p.drawRoundedRect(card_rect, 14, 14)
+        page = QRectF(card_rect.left() + self.PAD, card_rect.top() + self.PAD,
+                      self.page_size.width(), self.page_size.height())
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawRect(page)
+        if self.picture is not None and not self.picture.isNull():
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            p.drawPixmap(page, self.picture, QRectF(self.picture.rect()))
+        p.setPen(QPen(QColor(c.border_strong), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(page)
+        line = QRectF(page.left(), page.bottom() + 8, page.width(), self.CAPTION - 14)
+        p.setFont(font(9))
+        detail_width = QFontMetrics(p.font()).horizontalAdvance(self.detail) + 4
+        p.setPen(QColor(c.muted))
+        p.drawText(line, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self.detail)
+        p.setFont(font(9.5, True))
+        p.setPen(QColor(c.text))
+        title = QFontMetrics(p.font()).elidedText(self.title, Qt.TextElideMode.ElideMiddle,
+                                                  max(0, int(line.width() - detail_width - 12)))
+        p.drawText(line, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
+
 
 class DropOverlay(QWidget):
     """Shown over the file list while PDFs are dragged over the window."""

@@ -1,13 +1,13 @@
 """What goes where: the plan for the files in the list.
 
-Built again after every change. The window shows it, and the print button sends
-exactly the pages it includes:
+Built again after every change. The window shows it, and each print button
+sends exactly the pages the plan includes for its destination:
 
-  * A4 and A3 pages that are not printed yet, when their printer is switched on;
+  * A4 and A3 pages that are not printed yet;
   * plotter pages that need the roll which is in the plotter now.
 
 Pages the user skipped are left out; pages printed in this session are marked
-done, so pressing the button again prints only what is left (for the plotter:
+done, so pressing a button again prints only what is left (for the plotter:
 after the roll has been changed). Pure Python, unit-tested.
 """
 
@@ -48,9 +48,6 @@ class Entry:
 
 @dataclass
 class Options:
-    a4_on: bool = True
-    a3_on: bool = True
-    plot_on: bool = True
     a3_to_plotter: bool = False   # A3 pages on the plotter's 297 mm roll instead of the A3 printer
     roll: int = 610               # the roll in the plotter now
     duplex_a4: bool = False       # only changes the number of sheets shown
@@ -62,7 +59,7 @@ class PageRoute:
     roll: Optional[int] = None   # plotter pages: the roll they need
     length_mm: int = 0           # plotter pages: paper length
     oversize: bool = False       # wider than every roll: printed smaller
-    included: bool = False       # sent by the next print
+    included: bool = False       # sent by its print button
 
 
 @dataclass
@@ -87,8 +84,7 @@ class PlotRun:
 @dataclass
 class DestCount:
     total: int = 0      # pages going there (not skipped)
-    pending: int = 0    # of those, not printed yet
-    included: int = 0   # of those, sent by the next print
+    pending: int = 0    # of those, not printed yet: what its print button sends
 
 
 @dataclass
@@ -127,10 +123,6 @@ class Plan:
     @property
     def plot_included_mm(self) -> int:
         return sum(run.length_mm * run.page_count for run in self.plot_runs)
-
-    @property
-    def included(self) -> int:
-        return self.a4.included + self.a3.included + self.plot_included
 
     @property
     def plot_total(self) -> int:
@@ -189,19 +181,15 @@ def build_plan(entries: list[Entry], opts: Options) -> Plan:
                 if not state.done:
                     plan.a4.pending += 1
                     a4_pending += 1
-                    if opts.a4_on:
-                        route.included = True
-                        plan.a4.included += 1
-                        a4_here.append(pos)
+                    route.included = True
+                    a4_here.append(pos)
             elif route.dest == A3_DEST:
                 plan.a3.total += 1
                 if not state.done:
                     plan.a3.pending += 1
-                    if opts.a3_on:
-                        route.included = True
-                        plan.a3.included += 1
-                        a3_here.append(pos)
-            elif page.kind != A3 or opts.a3_on:      # A3 switched off: not on the plotter either
+                    route.included = True
+                    a3_here.append(pos)
+            else:
                 plan.oversize += route.oversize
                 roll = plan.rolls.setdefault(route.roll, RollCount())
                 roll.total += 1
@@ -209,7 +197,7 @@ def build_plan(entries: list[Entry], opts: Options) -> Plan:
                     roll.pending += 1
                     roll.pending_mm += route.length_mm
                     roll.lengths[route.length_mm] += 1
-                    if opts.plot_on and route.roll == opts.roll:
+                    if route.roll == opts.roll:
                         route.included = True
                         runs.setdefault(route.length_mm, {}).setdefault(entry_no, []).append(pos)
         plan.a4_sheets += math.ceil(a4_pending / 2) if opts.duplex_a4 else a4_pending

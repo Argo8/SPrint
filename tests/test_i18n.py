@@ -35,6 +35,15 @@ def test_croatian_plural_forms_differ_by_noun():
     assert count(21, "bad_page") == "21 nečitljiva stranica"
 
 
+def test_croatian_accusative_for_buttons():
+    i18n.set_language("hr")
+    try:
+        assert [count(n, "page_acc") for n in (1, 3, 5, 21)] == [
+            "1 stranicu", "3 stranice", "5 stranica", "21 stranicu"]
+    finally:
+        i18n.set_language("en")
+
+
 def test_meters_and_lists():
     assert i18n.meters(2102) == "2.1 m"
     assert i18n.join_and([420, 610, 914]) == "420, 610 and 914"

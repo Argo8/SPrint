@@ -77,7 +77,7 @@ def _set_app_id() -> None:
 def _place_window(window) -> None:
     screen = window.screen().availableGeometry()
     width = min(1260, int(screen.width() * 0.92))
-    height = min(880, int(screen.height() * 0.92))
+    height = min(960, int(screen.height() * 0.92))
     window.resize(width, height)
     window.move(screen.left() + (screen.width() - width) // 2, screen.top() + (screen.height() - height) // 2)
 

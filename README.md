@@ -35,12 +35,13 @@ Drop PDF files (or folders) into the window. SPrint reads the size of every page
 Sizes within 3 mm of A4/A3 count as A4/A3 (scanners and PDF printers rarely produce exact sizes).
 The visible page area is used (crop box, `/Rotate`, `/UserUnit`), i.e. what a PDF viewer shows and prints.
 
-One **Print** button sends everything that is switched on: the A4 pages, the A3 pages and the plotter pages for the
-roll that is in the plotter now. The plotter holds one roll at a time, so its pages are printed roll by roll:
+Each destination has its own card with its own button: **Print** in the *A4* and *A3* cards, **Plot** in the
+*Plotter* card. Pressing another card's button while one is printing queues it. The plotter holds one roll at a
+time, so its pages are plotted roll by roll:
 
 1. In the *Plotter* card pick the roll that is loaded. Each roll shows how many pages need it.
-2. Print. The roll gets a ✓ and SPrint says which roll is next (*Change the roll*).
-3. Load that roll, click *Roll … is loaded*, print again — until everything is printed.
+2. Plot. The roll gets a ✓ and SPrint says which roll is next.
+3. Load that roll, pick it in the card and plot again — until every roll is done.
 
 Printed pages are marked done, so printing again sends only what is left (*Print again* / *Plot again* resend a part).
 On the plotter each page is printed on paper of *roll width × page length* (a few millimetres longer if the plotter
@@ -51,8 +52,11 @@ own settings are never changed. SPrint remembers which roll is in the plotter.
 
 - Drag & drop of PDF files **and folders**; *Send to → SPrint* in Explorer and files dropped onto `SPrint.exe` work too,
   and go into the SPrint window that is already open
-- Click a file to see its pages with previews and where each one goes; click a page to leave it out
-- Per printer: on/off switch, printer choice and two-sided printing (when the printer can do it)
+- Every file shows a picture of its first page; click a file to see all its pages and where each one goes, click a
+  page to leave it out
+- Rest the mouse on a page picture for a moment to see the page large
+- Per printer: printer choice, its settings (⚙: trays, quality, paper…) and two-sided printing (when the printer can
+  do it)
 - Paper length needed on the plotter, per roll, before you print
 - Printers are found automatically the first time (and on request in *Settings*)
 - Number of copies (collated)
@@ -62,15 +66,16 @@ own settings are never changed. SPrint remembers which roll is in the plotter.
 - Only the needed pages of a file are printed; CAD layer visibility is kept
 - Printing runs in the background; the window shows progress per printer
 - English / Croatian interface
-- Keyboard: *Ctrl+O* adds files, *Ctrl+P* prints, *Esc* closes the settings
+- Keyboard: *Ctrl+O* adds files, *Esc* closes the settings
 - Log for troubleshooting (*Settings → Log*)
 
 ## How SPrint prints
 
 SPrint renders the pages itself (PDFium) straight into a Windows print job that carries its own paper size, copies,
 orientation and (if you switch it) two-sided printing. Your printing preferences (tray, colour, quality) still apply;
-nothing in the printer's settings is changed. This is what makes custom plot lengths possible. *Settings → Windows
-printer settings* opens the driver's own dialog for everything else.
+nothing in the printer's settings is changed. This is what makes custom plot lengths possible. The ⚙ button beside
+each printer opens its printing preferences (the driver's own dialog) for everything else; what you set there is
+used by SPrint's next print.
 
 The A4/A3 printers can use an external PDF program instead — add to `%APPDATA%\SPrint\settings.ini`:
 
@@ -212,12 +217,12 @@ Povucite PDF datoteke (ili mape) u prozor. SPrint očita veličinu svake stranic
 Veličine do 3 mm odstupanja od A4/A3 smatraju se A4/A3 (skeneri i PDF pisači rijetko daju točne mjere).
 Koristi se vidljivi dio stranice (crop box, `/Rotate`, `/UserUnit`), tj. ono što PDF preglednik prikazuje i ispisuje.
 
-Jedan gumb **Ispiši** šalje sve što je uključeno: A4 stranice, A3 stranice i stranice za ploter za rolu koja je sada
-u ploteru. U ploteru je jedna rola, pa se ploter ispisuje rolu po rolu:
+Svako odredište ima svoju karticu i svoj gumb: **Ispiši** u karticama *A4* i *A3*, **Plotaj** u kartici *Ploter*.
+Klik na gumb druge kartice dok jedna ispisuje stavlja je u red. U ploteru je jedna rola, pa se plota rolu po rolu:
 
 1. U kartici *Ploter* odaberite rolu koja je stavljena. Uz svaku rolu piše koliko stranica je treba.
-2. Ispišite. Rola dobije ✓ i SPrint kaže koja je sljedeća (*Promijeni rolu*).
-3. Stavite tu rolu, kliknite *Rola … je stavljena* i ispišite opet — dok sve ne bude ispisano.
+2. Plotajte. Rola dobije ✓ i SPrint kaže koja je sljedeća.
+3. Stavite tu rolu, odaberite je u kartici i plotajte opet — dok sve role ne budu gotove.
 
 Ispisane stranice označe se kao gotove, pa ponovni ispis šalje samo ono što je ostalo (*Ispiši ponovno* / *Plotaj
 ponovno* šalju dio opet). Na ploteru se svaka stranica ispisuje na papir *širina role × dužina stranice* (nekoliko
@@ -228,8 +233,11 @@ putuje sa svakim poslom ispisa, pa se postavke samog plotera nikad ne mijenjaju.
 
 - Drag & drop PDF datoteka **i mapa**; rade i *Pošalji u → SPrint* u Exploreru i ispuštanje datoteka na `SPrint.exe`,
   a datoteke idu u već otvoren prozor SPrinta
-- Klik na datoteku pokazuje njezine stranice sa sličicama i kamo koja ide; klik na stranicu je preskače
-- Za svaki pisač: prekidač, odabir pisača i obostrani ispis (ako ga pisač podržava)
+- Svaka datoteka pokazuje sličicu prve stranice; klik na datoteku pokazuje sve njezine stranice i kamo koja ide,
+  klik na stranicu je preskače
+- Zadržite miš na sličici stranice i stranica se pokaže uvećano
+- Za svaki pisač: odabir pisača, njegove postavke (⚙: ladice, kvaliteta, papir…) i obostrani ispis (ako ga pisač
+  podržava)
 - Dužina papira potrebna na ploteru, po roli, prije ispisa
 - Pisači se prvi put prepoznaju sami (i na zahtjev u *Postavkama*)
 - Broj kopija (složene)
@@ -239,15 +247,16 @@ putuje sa svakim poslom ispisa, pa se postavke samog plotera nikad ne mijenjaju.
 - Ispisuju se samo potrebne stranice datoteke; vidljivost CAD slojeva ostaje očuvana
 - Ispis radi u pozadini; prozor pokazuje napredak za svaki pisač
 - Sučelje na hrvatskom / engleskom
-- Tipkovnica: *Ctrl+O* dodaje datoteke, *Ctrl+P* ispisuje, *Esc* zatvara postavke
+- Tipkovnica: *Ctrl+O* dodaje datoteke, *Esc* zatvara postavke
 - Dnevnik za otklanjanje problema (*Postavke → Dnevnik*)
 
 ## Kako SPrint ispisuje
 
 SPrint sam iscrtava stranice (PDFium) izravno u Windows posao ispisa koji nosi vlastitu veličinu papira, broj kopija,
 orijentaciju i (ako ga uključite) obostrani ispis. Vaše postavke ispisa (ladica, boja, kvaliteta) i dalje vrijede;
-postavke pisača se ne mijenjaju. Upravo to omogućuje proizvoljne dužine papira na ploteru. *Postavke → Windows postavke
-pisača* otvara prozor upravljačkog programa za sve ostalo.
+postavke pisača se ne mijenjaju. Upravo to omogućuje proizvoljne dužine papira na ploteru. Gumb ⚙ uz svaki pisač
+otvara njegove postavke ispisa (prozor upravljačkog programa) za sve ostalo; ono što tamo namjestite SPrint koristi
+pri sljedećem ispisu.
 
 A4/A3 pisači mogu umjesto toga koristiti vanjski PDF program — dodajte u `%APPDATA%\SPrint\settings.ini`:
 

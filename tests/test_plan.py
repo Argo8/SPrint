@@ -27,8 +27,8 @@ def parts(plan_parts):
 
 def test_routing_and_counts():
     plan = build_plan(sample(), Options(roll=610))
-    assert (plan.a4.total, plan.a4.pending, plan.a4.included) == (14, 14, 14)
-    assert (plan.a3.total, plan.a3.included, plan.a3_pages) == (4, 4, 4)
+    assert (plan.a4.total, plan.a4.pending) == (14, 14)
+    assert (plan.a3.total, plan.a3.pending, plan.a3_pages) == (4, 4, 4)
     assert sorted(plan.rolls) == [420, 610, 914]
     assert (plan.rolls[610].pending, plan.rolls[610].pending_mm) == (2, 1682)
     assert plan.rolls[420].lengths == {594: 1}
@@ -37,7 +37,7 @@ def test_routing_and_counts():
     assert parts(plan.a3_parts) == [(2, [0, 1, 2, 3])]
     # only the roll in the plotter is printed
     assert [(r.width_mm, r.length_mm, parts(r.parts)) for r in plan.plot_runs] == [(610, 841, [(0, [0, 1])])]
-    assert plan.included == 14 + 4 + 2
+    assert plan.plot_included == 2
     assert plan.entries[0].routes[2].dest == PLOT_DEST and plan.entries[0].routes[2].roll == 420
 
 
@@ -56,18 +56,14 @@ def test_a3_to_plotter_joins_the_297_roll():
     assert plan.a3.total == 0 and plan.a3_pages == 2
     assert plan.rolls[297].pending == 3
     assert [(r.length_mm, r.page_count) for r in plan.plot_runs] == [(630, 1), (420, 2)]
-    # A3 switched off: not on the plotter either
-    plan = build_plan(entries, Options(a3_to_plotter=True, a3_on=False, roll=297))
-    assert plan.rolls[297].pending == 1 and plan.plot_included == 1
 
 
-def test_switches_and_skipped_pages():
+def test_skipped_pages():
     entries = sample()
     entries[1].states[0].skip = True
-    plan = build_plan(entries, Options(a4_on=False, plot_on=False, roll=610))
-    assert (plan.a4.total, plan.a4.included) == (13, 0)
-    assert plan.plot_runs == [] and plan.rolls[610].pending == 2
-    assert plan.included == 4
+    plan = build_plan(entries, Options(roll=610))
+    assert (plan.a4.total, plan.a4.pending) == (13, 13)
+    assert parts(plan.a4_parts)[0] == (1, list(range(1, 12)))
     assert plan.entries[1].active == 11
     assert plan.entries[1].kinds["A4"] == 12
 
@@ -86,14 +82,14 @@ def test_roll_by_roll_workflow():
     mark_done(entries, plan.a4_parts + plan.a3_parts + [p for r in plan.plot_runs for p in r.parts])
 
     plan = build_plan(entries, opts)
-    assert plan.included == 0                       # nothing left on this roll, printers done
+    assert (plan.a4.pending, plan.a3.pending, plan.plot_included) == (0, 0, 0)   # roll 610 done
     assert (plan.a4.pending, plan.rolls[610].pending, plan.rolls[610].total) == (0, 0, 2)
     assert plan.next_roll(610) == 420
     assert plan.entries[0].done == 2
 
     opts.roll = 420                                 # the user changed the roll
     plan = build_plan(entries, opts)
-    assert plan.included == 1 and plan.plot_runs[0].length_mm == 594
+    assert plan.plot_included == 1 and plan.plot_runs[0].length_mm == 594
     mark_done(entries, [p for r in plan.plot_runs for p in r.parts])
     assert build_plan(entries, opts).next_roll(420) == 914
 

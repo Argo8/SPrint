@@ -28,7 +28,8 @@ log = logging.getLogger(__name__)
 
 DESTS = (A4_DEST, A3_DEST, PLOT_DEST)
 MAX_COPIES = 99
-PREVIEW_PX = 160
+BIG_PREVIEW_PX = 400     # pictures this large take memory: only the latest few are kept
+BIG_PREVIEWS_KEPT = 8
 DONE_SHOW_MS = 2200
 
 
@@ -76,7 +77,7 @@ class Services:
 class Bridge(QObject):
     """Signals the worker threads emit."""
     doc_read = Signal(object, object)          # entry, DocInfo
-    preview = Signal(str, int, QImage)         # path, page index, picture
+    preview = Signal(str, int, int, QImage)    # path, page index, size, picture
     progress = Signal(str, int, int)           # destination, pages handled, pages
     part_sent = Signal(object)                 # Part
     log = Signal(str, str)                     # message, level
@@ -87,7 +88,7 @@ class Bridge(QObject):
 class Controller(QObject):
     changed = Signal()                 # anything shown may have changed
     entries_changed = Signal()         # files were added or removed
-    preview_ready = Signal(str, int)   # path, page index: picture in the cache
+    preview_ready = Signal(str, int, int)   # path, page index, size: picture in the cache
     toast = Signal(str, str)           # message, kind ("ok", "info", "error")
     log_line = Signal(str, str)        # message, level
     printers_changed = Signal()        # the list of installed printers
@@ -105,10 +106,12 @@ class Controller(QObject):
         self.duplex = {A4_DEST: False, A3_DEST: False}
         self.duplex_supported = {A4_DEST: False, A3_DEST: False}
         self.installed: list[str] = []
-        self.job_state = "idle"           # idle, printing, done
+        self.running: Optional[str] = None   # the destination being printed
+        self.waiting: list[str] = []         # destinations to print after it
+        self.just_sent: set[str] = set()     # printed a moment ago
         self.totals = dict.fromkeys(DESTS, 0)
         self.handled = dict.fromkeys(DESTS, 0)
-        self.previews: dict[tuple[str, int], QPixmap] = {}
+        self.previews: dict[tuple[str, int, int], QPixmap] = {}   # (path, page index, size)
         self.log_lines: list[tuple[str, str]] = []
         self._plan: Optional[Plan] = None
         self._cancel = threading.Event()
@@ -125,8 +128,9 @@ class Controller(QObject):
         self._reads: "queue.Queue[Entry]" = queue.Queue()
         self._pending_reads = 0
         threading.Thread(target=self._read_worker, name="read", daemon=True).start()
-        self._preview_requests: "queue.Queue[tuple[str, int]]" = queue.Queue()
-        self._preview_wanted: set[tuple[str, int]] = set()
+        self._preview_requests: queue.PriorityQueue = queue.PriorityQueue()
+        self._preview_wanted: set[tuple[str, int, int]] = set()
+        self._preview_count = 0
         threading.Thread(target=self._preview_worker, name="preview", daemon=True).start()
         self._job_thread: Optional[threading.Thread] = None
 
@@ -134,7 +138,7 @@ class Controller(QObject):
 
     @property
     def busy(self) -> bool:
-        return self.job_state == "printing"
+        return self.running is not None or bool(self.waiting)
 
     @property
     def reading(self) -> int:
@@ -153,13 +157,18 @@ class Controller(QObject):
     def printer_for(self, dest: str) -> str:
         return {A4_DEST: self.printers.a4, A3_DEST: self.printers.a3, PLOT_DEST: self.printers.plotter}[dest]
 
-    def missing_printer(self, plan: Plan) -> Optional[str]:
-        """The first destination with pages to print but no printer chosen."""
-        for dest, pages in ((A4_DEST, plan.a4.included), (A3_DEST, plan.a3.included),
-                            (PLOT_DEST, plan.plot_included)):
-            if pages and not self.printer_for(dest):
-                return dest
-        return None
+    @staticmethod
+    def pages_for(plan: Plan, dest: str) -> int:
+        """The pages ``dest``'s print button sends."""
+        return {A4_DEST: plan.a4.pending, A3_DEST: plan.a3.pending, PLOT_DEST: plan.plot_included}[dest]
+
+    def status(self, dest: str) -> str:
+        """'printing', 'waiting' (for the one printing), 'sent' (a moment ago) or 'idle'."""
+        if dest == self.running:
+            return "printing"
+        if dest in self.waiting:
+            return "waiting"
+        return "sent" if dest in self.just_sent else "idle"
 
     def log(self, message: str, level: str = "info") -> None:
         getattr(log, {"error": "error", "warn": "warning"}.get(level, "info"))(message)
@@ -267,44 +276,51 @@ class Controller(QObject):
 
     # ── Page pictures ────────────────────────────────────────────────────────
 
-    def preview(self, path: str, page_index: int) -> Optional[QPixmap]:
-        """The page's picture if it is ready; otherwise it is made in the background."""
-        key = (path, page_index)
+    def preview(self, path: str, page_index: int, px: int, urgent: bool = False) -> Optional[QPixmap]:
+        """The page's picture, ``px`` pixels on its long side, if it is ready; otherwise
+        it is made in the background (``urgent``: before the others waiting)."""
+        key = (path, page_index, px)
         if key in self.previews:
             return self.previews[key]
         if key not in self._preview_wanted:
             self._preview_wanted.add(key)
-            self._preview_requests.put(key)
+            self._preview_count += 1
+            self._preview_requests.put((0 if urgent else 1, self._preview_count, key))
         return None
+
+    def any_preview(self, path: str, page_index: int) -> Optional[QPixmap]:
+        """The largest picture of the page made so far, to show while a bigger one is made."""
+        sizes = [key for key in self.previews if key[:2] == (path, page_index)]
+        return self.previews[max(sizes, key=lambda key: key[2])] if sizes else None
 
     def _preview_worker(self) -> None:
         while True:
-            path, index = self._preview_requests.get()
+            _urgency, _order, (path, index, px) = self._preview_requests.get()
             try:
-                width, height, data = render_preview(path, index, PREVIEW_PX)
+                width, height, data = render_preview(path, index, px)
                 image = QImage(data, width, height, width * 4, QImage.Format.Format_RGBA8888).copy()
             except Exception:
                 log.debug("No preview for %s page %d", path, index, exc_info=True)
                 image = QImage()
-            self.bridge.preview.emit(path, index, image)
+            self.bridge.preview.emit(path, index, px, image)
 
-    def _on_preview(self, path: str, index: int, image: QImage) -> None:
-        key = (path, index)
+    def _on_preview(self, path: str, index: int, px: int, image: QImage) -> None:
+        key = (path, index, px)
         self._preview_wanted.discard(key)
-        if image.isNull():
+        if image.isNull() or not any(entry.path == path for entry in self.entries):
             return
         self.previews[key] = QPixmap.fromImage(image)
-        self.preview_ready.emit(path, index)
+        if px >= BIG_PREVIEW_PX:
+            big = [k for k in self.previews if k[2] >= BIG_PREVIEW_PX]
+            for old in big[:-BIG_PREVIEWS_KEPT]:
+                del self.previews[old]
+        self.preview_ready.emit(path, index, px)
 
     def _forget_previews(self, path: str) -> None:
         for key in [k for k in self.previews if k[0] == path]:
             del self.previews[key]
 
     # ── Options ──────────────────────────────────────────────────────────────
-
-    def set_switch(self, dest: str, on: bool) -> None:
-        setattr(self.opts, {A4_DEST: "a4_on", A3_DEST: "a3_on", PLOT_DEST: "plot_on"}[dest], on)
-        self._changed()
 
     def set_a3_to_plotter(self, on: bool) -> None:
         self.opts.a3_to_plotter = on
@@ -419,27 +435,36 @@ class Controller(QObject):
 
     # ── Printing ─────────────────────────────────────────────────────────────
 
-    def start_print(self) -> bool:
-        if self.busy or self.reading:
+    def start_print(self, dest: str) -> bool:
+        """Print ``dest``'s pages now, or after the print that is running."""
+        if self.reading or self.status(dest) in ("printing", "waiting"):
             return False
-        changed = self._refresh_changed_files()
-        if changed:
-            self.toast.emit(t("toast_changed", name=changed[0]), "info")
+        if not self.busy:
+            changed = self._refresh_changed_files()
+            if changed:
+                self.toast.emit(t("toast_changed", name=changed[0]), "info")
+                return False
+        if not self.pages_for(self.plan(), dest):
             return False
-        plan = self.plan()
-        if not plan.included:
+        if not self.printer_for(dest):
+            self.toast.emit(t("toast_pick_printer", target=t(f"target_{dest}")), "error")
             return False
-        missing = self.missing_printer(plan)
-        if missing:
-            self.toast.emit(t("sub_pick_printer", target=t(f"target_{missing}")), "error")
-            return False
+        self.just_sent.discard(dest)
+        if self.running is None:
+            self._run(dest)
+        else:
+            self.waiting.append(dest)
+            self._changed()
+        return True
+
+    def _run(self, dest: str) -> None:
+        duplex = self.duplex[dest] if self.duplex_supported.get(dest) else None
         job = jobs.Job.from_plan(
-            plan, jobs.Printers(self.printers.a4, self.printers.a3, self.printers.plotter), self.copies,
-            self.duplex[A4_DEST] if self.duplex_supported[A4_DEST] else None,
-            self.duplex[A3_DEST] if self.duplex_supported[A3_DEST] else None)
-        self.totals = {dest: job.pages(dest) * self.copies for dest in DESTS}
-        self.handled = dict.fromkeys(DESTS, 0)
-        self.job_state = "printing"
+            self.plan(), dest, jobs.Printers(self.printers.a4, self.printers.a3, self.printers.plotter),
+            self.copies, duplex)
+        self.running = dest
+        self.totals[dest] = job.pages(dest) * self.copies
+        self.handled[dest] = 0
         self._cancel = threading.Event()
         ctx = jobs.JobContext(
             self.services.backend, self.services.plot_backend, self.temp_dir,
@@ -467,8 +492,15 @@ class Controller(QObject):
         self._changed()
         return True
 
-    def stop_print(self) -> None:
-        self._cancel.set()
+    def stop_print(self, dest: Optional[str] = None) -> None:
+        """Stop ``dest``'s print or take it out of the queue; without one, stop everything."""
+        if dest is None:
+            self.waiting.clear()
+        if dest in self.waiting:
+            self.waiting.remove(dest)
+        elif self.running is not None and dest in (None, self.running):
+            self._cancel.set()
+        self._changed()
 
     def _on_progress(self, dest: str, handled: int, total: int) -> None:
         self.handled[dest] = handled * self.copies
@@ -479,29 +511,33 @@ class Controller(QObject):
         self._changed()
 
     def _on_job_done(self, sent: int, cancelled: bool, problems: int) -> None:
+        dest, self.running = self.running, None
         self._job_thread = None
-        self.job_state = "done"
         plan = self.plan()
         if cancelled:
             self.toast.emit(t("toast_stopped"), "info")
         elif problems:
             self.toast.emit(t("toast_problems"), "error")
         else:
+            self.just_sent.add(dest)
+            QTimer.singleShot(DONE_SHOW_MS, self, lambda sent_dest=dest: self._sent_shown(sent_dest))
             pages = count(sent * self.copies, "page")
-            current = plan.rolls.get(self.opts.roll)
-            nxt = None if current and current.pending else plan.next_roll(self.opts.roll)
+            nxt = plan.next_roll(self.opts.roll) if dest == PLOT_DEST and not plan.plot_included else None
             self.toast.emit(t("toast_sent_next", pages=pages, w=nxt) if nxt else t("toast_sent", pages=pages), "ok")
+        while self.waiting:
+            queued = self.waiting.pop(0)
+            if self.pages_for(plan, queued) and self.printer_for(queued):
+                self._run(queued)
+                return
         if self.settings.clear_when_done and not plan.pending and not problems and not cancelled:
             self.entries.clear()
             self.previews.clear()
             self.entries_changed.emit()
         self._changed()
-        QTimer.singleShot(DONE_SHOW_MS, self, self._back_to_idle)
 
-    def _back_to_idle(self) -> None:
-        if self.job_state == "done":
-            self.job_state = "idle"
-            self._changed()
+    def _sent_shown(self, dest: str) -> None:
+        self.just_sent.discard(dest)
+        self._changed()
 
     def wait_for_job(self, timeout: float = 5.0) -> None:
         thread = self._job_thread

@@ -1,20 +1,22 @@
-"""The SPrint window: files on the left, where they go on the right, one print button.
+"""The SPrint window: files on the left, where they go on the right.
 
-The window shows the controller's state: ``refresh`` rebuilds every text and
-switch from a fresh plan whenever something changes.
+Each destination (A4, A3, plotter) has its own card with its printer, the
+printer's settings and its own print button. The window shows the controller's
+state: ``refresh`` rebuilds every text and button from a fresh plan whenever
+something changes.
 """
 
 from __future__ import annotations
 
+import math
 import os
-from html import escape
 from typing import Optional
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation
 from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QPainter, QShortcut
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QFrame,
-                               QGraphicsOpacityEffect, QGridLayout, QLabel, QMainWindow, QMessageBox,
-                               QPlainTextEdit, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QFrame, QGridLayout, QLabel,
+                               QMainWindow, QMessageBox, QPlainTextEdit, QScrollArea, QStackedWidget,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, AUTHOR, __version__
 from ..i18n import count, get_language, join_and, meters, set_language, t
@@ -24,10 +26,10 @@ from ..settings import data_dir
 from . import icons
 from .controller import Controller
 from .theme import colors, font
-from .widgets import (EASE, Collapsible, DropOverlay, Drawer, ElidedLabel, FlowLayout, HoverButton,
-                      PageShape, PageTile, PrintButton, ProgressBar, RollChip, Segmented, Spinner,
-                      Switch, Toast, ToggleChip, button, card, fade_in, hbox, icon_button,
-                      label, set_icon, set_prop, vbox)
+from .widgets import (EASE, ActionButton, Collapsible, DropOverlay, Drawer, ElidedLabel, FlowLayout,
+                      HoverButton, PageShape, PageTile, PreviewPopup, ProgressBar, RollChip, Segmented,
+                      Spinner, Switch, Toast, ToggleChip, button, card, fade_in, hbox, icon_button, label,
+                      set_icon, set_prop, vbox)
 
 RIGHT_WIDTH = 410
 
@@ -95,12 +97,12 @@ class FloatingIcon(QWidget):
 
 
 class RowHeader(HoverButton):
-    """The clickable top line of a file: picture, name and what is in it."""
+    """The clickable top line of a file: picture of its first page, name and what is in it."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = hbox(self, (6, 4, 6, 4), 12)
-        self.shape = PageShape(34)
+        self.shape = PageShape(46)
         self.name = ElidedLabel()
         self.name.setFont(font(10.5, True))
         self.chips = QWidget()
@@ -112,7 +114,8 @@ class RowHeader(HoverButton):
         layout.addWidget(self.shape)
         layout.addLayout(texts, 1)
         layout.addWidget(self.chevron)
-        for child in (self.shape, self.name, self.chips, self.chevron):
+        # the picture takes the mouse for the large preview; clicks on it still reach the row
+        for child in (self.name, self.chips, self.chevron):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
     def set_chips(self, chips: list[tuple[str, str]]) -> None:
@@ -140,7 +143,7 @@ class RowHeader(HoverButton):
                 if self.chips_layout.itemAt(i).widget() is not None]
 
     def sizeHint(self):
-        return QSize(200, 56)
+        return QSize(200, 64)
 
     def paintEvent(self, _event):
         c = colors()
@@ -162,11 +165,13 @@ class FileRow(QFrame):
         super().__init__()
         self.window = window
         self.entry = entry
+        self.dest_texts: list[str] = []   # where each page goes, as shown
         self.setProperty("row", True)
         layout = vbox(self, spacing=0)
         top = hbox(margins=(6, 6, 8, 6), spacing=8)
         self.header = RowHeader()
         self.header.clicked.connect(self.toggle)
+        window.peek.watch(self.header.shape, self, 0)
         self.spinner = Spinner()
         self.status = QLabel()
         self.status.setFont(font(8.5, True))
@@ -179,7 +184,7 @@ class FileRow(QFrame):
         top.addWidget(self.remove_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(top)
         self.pages = Collapsible()
-        pages_layout = vbox(self.pages, (62, 0, 14, 14), 10)
+        pages_layout = vbox(self.pages, (74, 0, 14, 14), 10)
         self.hint = label(t("pages_hint"), muted=True, size=9)
         self.tiles_box = QWidget()
         self.tiles_layout = FlowLayout(self.tiles_box, spacing=8)
@@ -206,8 +211,14 @@ class FileRow(QFrame):
         for pos, page in enumerate(self.entry.doc.pages):
             tile = PageTile((page.width_mm, page.height_mm), page.kind, page_label(page))
             tile.clicked.connect(lambda _=False, pos=pos: self.window.c.toggle_page(self.entry, pos))
+            self.window.peek.watch(tile, self, pos)
             self.tiles_layout.addWidget(tile)
             self.tiles.append(tile)
+
+    def page_detail(self, pos: int) -> str:
+        page = self.entry.doc.pages[pos]
+        dest = self.dest_texts[pos] if pos < len(self.dest_texts) else ""
+        return t("page_tip", n=page.index + 1, size=page_label(page), dest=dest)
 
     def update_from(self, info, locked: bool) -> None:
         entry, c = self.entry, self.window.c
@@ -233,7 +244,7 @@ class FileRow(QFrame):
         first = doc.pages[0] if doc.pages else None
         if first is not None:
             self.header.shape.set_page((first.width_mm, first.height_mm), first.kind)
-            picture = c.preview(entry.path, first.index)
+            picture = c.preview(entry.path, first.index, self.header.shape.picture_px())
             if picture is not None:
                 self.header.shape.set_picture(picture)
         chips = [(t("file_pages", n=doc.page_count), "")]
@@ -257,63 +268,163 @@ class FileRow(QFrame):
         printed = info.active > 0 and info.done == info.active
         self._status(t("status_printed") if printed else "", "ok")
         self.hint.setText(t("pages_hint"))
-        if self.tiles:
-            for pos, (page, state, route, tile) in enumerate(zip(doc.pages, entry.states, info.routes, self.tiles)):
-                if state.skip:
-                    dest = t("dest_skipped")
-                elif route.dest == A4_DEST:
-                    dest = t("dest_a4")
-                elif route.dest == A3_DEST:
-                    dest = t("dest_a3")
-                else:
-                    dest = t("dest_roll", w=route.roll)
-                if state.done and not state.skip:
-                    dest += " ✓"
-                tile.set_state(dest, state.skip, state.done,
-                               t("page_tip", n=page.index + 1, size=page_label(page), dest=dest))
-                tile.setEnabled(not locked)
-                if self.pages.is_open and tile.picture is None:
-                    picture = c.preview(entry.path, page.index)
-                    if picture is not None:
-                        tile.set_picture(picture)
+        self.dest_texts = []
+        for state, route in zip(entry.states, info.routes):
+            if state.skip:
+                dest = t("dest_skipped")
+            elif route.dest == A4_DEST:
+                dest = t("dest_a4")
+            elif route.dest == A3_DEST:
+                dest = t("dest_a3")
+            else:
+                dest = t("dest_roll", w=route.roll)
+            self.dest_texts.append(dest + (" ✓" if state.done and not state.skip else ""))
+        for pos, (page, state, tile) in enumerate(zip(doc.pages, entry.states, self.tiles)):
+            tile.set_state(self.dest_texts[pos], state.skip, state.done, self.page_detail(pos))
+            tile.setEnabled(not locked)
+            if self.pages.is_open and tile.picture is None:
+                picture = c.preview(entry.path, page.index, tile.picture_px())
+                if picture is not None:
+                    tile.set_picture(picture)
 
     def _status(self, text: str, kind: str) -> None:
         self.status.setVisible(bool(text))
         self.status.setText(("✓ " if kind == "ok" else "") + text)
         set_prop(self.status, "pill", kind)
 
-    def picture_ready(self, page_index: int) -> None:
+    def picture_ready(self, page_index: int, px: int) -> None:
         if not self.entry.ready:
             return
-        picture = self.window.c.previews.get((self.entry.path, page_index))
+        picture = self.window.c.previews.get((self.entry.path, page_index, px))
         if picture is None:
             return
         doc = self.entry.doc
-        if doc.pages and doc.pages[0].index == page_index:
+        if doc.pages and doc.pages[0].index == page_index and self.header.shape.picture_px() == px:
             self.header.shape.set_picture(picture)
         for page, tile in zip(doc.pages, self.tiles):
-            if page.index == page_index:
+            if page.index == page_index and tile.picture_px() == px:
                 tile.set_picture(picture)
 
 
-class DestCard(QFrame):
-    """Header of a destination card: badge, title, summary and on/off switch."""
+class PagePeek(QObject):
+    """A large picture of a page when the mouse rests on one of its small pictures."""
+    DELAY_MS = 550    # resting this long opens it
+    LINGER_MS = 150   # moving to the next page within this keeps it open
 
-    def __init__(self, badge_kind: str, badge_text: str = "", badge_icon: Optional[str] = None):
+    def __init__(self, window: "MainWindow"):
+        super().__init__(window)
+        self.window = window
+        self.popup = PreviewPopup(window.centralWidget())
+        self.current: Optional[QWidget] = None
+        self.shown: Optional[tuple[str, int, int]] = None   # (path, page index, size) wanted
+        self._wait = QTimer(self)
+        self._wait.setSingleShot(True)
+        self._wait.setInterval(self.DELAY_MS)
+        self._wait.timeout.connect(self._show)
+        self._linger = QTimer(self)
+        self._linger.setSingleShot(True)
+        self._linger.setInterval(self.LINGER_MS)
+        self._linger.timeout.connect(self.hide)
+        window.c.preview_ready.connect(self._picture_ready)
+
+    def watch(self, widget: QWidget, row: FileRow, pos: int) -> None:
+        """Show page ``pos`` of ``row``'s file when the mouse rests on ``widget``."""
+        widget.peek_target = (row, pos)
+        widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind == QEvent.Type.Enter:
+            self.current = obj
+            self._linger.stop()
+            if self.popup.isVisible():
+                self._show()
+            else:
+                self._wait.start()
+        elif kind == QEvent.Type.Leave:
+            if obj is self.current:
+                self.current = None
+                self._wait.stop()
+                self._linger.start()
+        elif kind in (QEvent.Type.MouseButtonPress, QEvent.Type.Wheel):
+            self.hide()
+        elif kind == QEvent.Type.ToolTip:   # the large picture says more
+            return True
+        return False
+
+    def hide(self) -> None:
+        self._wait.stop()
+        self._linger.stop()
+        self.shown = None
+        self.popup.hide()
+
+    def _show(self) -> None:
+        widget = self.current
+        target = getattr(widget, "peek_target", None)
+        if target is None or not widget.isVisible():
+            return
+        row, pos = target
+        entry = row.entry
+        if not entry.ready or pos >= len(entry.doc.pages):
+            return
+        page = entry.doc.pages[pos]
+        root = self.window.centralWidget()
+        edge = 2 * (PreviewPopup.SHADOW + PreviewPopup.PAD)
+        scale = min((min(root.width() * 0.46, 900) - edge) / page.width_mm,
+                    (root.height() - 24 - edge - PreviewPopup.CAPTION) / page.height_mm)
+        size = QSize(max(60, round(page.width_mm * scale)), max(60, round(page.height_mm * scale)))
+        px = math.ceil(max(size.width(), size.height()) * root.devicePixelRatioF())
+        c = self.window.c
+        picture = c.preview(entry.path, page.index, px, urgent=True)
+        self.shown = (entry.path, page.index, px)
+        self.popup.show_page(picture or c.any_preview(entry.path, page.index), size,
+                             os.path.basename(entry.path), row.page_detail(pos), loading=picture is None)
+        self._place(widget)
+        self.popup.appear()
+
+    def _place(self, widget: QWidget) -> None:
+        """Beside the small picture, on the side with room, inside the window."""
+        root = self.window.centralWidget()
+        area = QRect(widget.mapTo(root, QPoint(0, 0)), widget.size())
+        width, height = self.popup.width(), self.popup.height()
+        if area.right() + width <= root.width():
+            x = area.right()
+        elif area.left() - width >= 0:
+            x = area.left() - width
+        else:
+            x = max(0, min(root.width() - width, area.center().x() - width // 2))
+        y = max(0, min(root.height() - height, area.center().y() - height // 2))
+        self.popup.move(x, y)
+
+    def _picture_ready(self, path: str, index: int, px: int) -> None:
+        if self.shown == (path, index, px) and self.popup.isVisible():
+            picture = self.window.c.previews.get(self.shown)
+            if picture is not None:
+                self.popup.set_picture(picture)
+
+
+class DestCard(QFrame):
+    """A destination: badge, title and summary, its printer and settings, its print button."""
+
+    def __init__(self, badge_kind: str, badge_text: str = "", badge_icon: Optional[str] = None,
+                 role: str = "accent"):
         super().__init__()
         self.setProperty("card", True)
-        self.layout_ = vbox(self, (14, 14, 14, 14), 10)
-        head = hbox(spacing=12)
+        self.layout_ = vbox(self, (14, 12, 14, 12), 8)
+        self.head = hbox(spacing=12)
         badge = QLabel(badge_text)
-        badge.setFixedSize(44, 44)
+        badge.setFixedSize(38, 38)
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge.setFont(font(11, True))
+        badge.setFont(font(10.5, True))
         badge.setProperty("badge", badge_kind)
         if badge_icon:
-            set_icon(badge, badge_icon, "plot_text", 22)
+            set_icon(badge, badge_icon, "plot_text", 20)
         texts = vbox(spacing=1)
-        self.title = label(size=11, bold=True)
+        self.title = label(size=10.5, bold=True)
+        self.title_row = hbox(spacing=8)   # a toggle (two-sided) can go at its end
+        self.title_row.addWidget(self.title, 1)
         self.summary = label(muted=True, size=9.5)
+        self.summary.setMinimumWidth(1)   # a long text is cut instead of widening the column
         self.reprint = button("", "link")
         self.reprint.setFont(font(9, True))
         self.reprint.setMinimumHeight(20)
@@ -321,58 +432,78 @@ class DestCard(QFrame):
         line.addWidget(self.summary)
         line.addWidget(self.reprint)
         line.addStretch(1)
-        texts.addWidget(self.title)
+        texts.addLayout(self.title_row)
         texts.addLayout(line)
-        self.switch = Switch()
-        head.addWidget(badge)
-        head.addLayout(texts, 1)
-        head.addWidget(self.switch)
-        self.layout_.addLayout(head)
+        self.head.addWidget(badge)
+        self.head.addLayout(texts, 1)
+        self.layout_.addLayout(self.head)
         self.body = QWidget()
-        self.body_layout = vbox(self.body, spacing=10)
+        self.body_layout = vbox(self.body, spacing=8)
         self.layout_.addWidget(self.body)
-        self.progress_row = QWidget()
-        row = hbox(self.progress_row, spacing=10)
-        self.bar = ProgressBar(badge_kind)
-        self.bar_text = label(muted=True, size=9, bold=True)
-        self.bar_text.setMinimumWidth(64)
-        self.bar_text.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        row.addWidget(self.bar, 1)
-        row.addWidget(self.bar_text)
-        self.progress_row.hide()
-        self.layout_.addWidget(self.progress_row)
 
-    def printer_row(self, chip: Optional[ToggleChip] = None) -> tuple[QWidget, QComboBox]:
-        """The printer list, with a toggle (two-sided) beside it."""
+        self.action = QStackedWidget()
+        self.action.setFixedHeight(46)
+        self.print_button = ActionButton(role)
+        self.action.addWidget(self.print_button)
+        progress = QWidget()
+        row = hbox(progress, (4, 0, 0, 0), 10)
+        texts = vbox(spacing=7)
+        line = hbox(spacing=8)
+        self.spinner = Spinner()
+        self.status_text = label(size=10, bold=True)
+        self.status_count = label(muted=True, size=9.5, bold=True)
+        line.addWidget(self.spinner)
+        line.addWidget(self.status_text, 1)
+        line.addWidget(self.status_count)
+        texts.addStretch(1)
+        texts.addLayout(line)
+        self.bar = ProgressBar(badge_kind)
+        texts.addWidget(self.bar)
+        texts.addStretch(1)
+        row.addLayout(texts, 1)
+        self.stop_button = button("", "ghost", "stop")
+        row.addWidget(self.stop_button)
+        self.action.addWidget(progress)
+        self.sent_label = QLabel()
+        self.sent_label.setFont(font(10.5, True))
+        self.sent_label.setProperty("pill", "ok")
+        self.sent_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.action.addWidget(self.sent_label)
+        self.layout_.addWidget(self.action)
+
+    def printer_row(self) -> tuple[QWidget, QComboBox, QToolButton]:
+        """The printer list and a button for the printer's settings."""
         box = QWidget()
-        layout = hbox(box, spacing=8)
+        layout = hbox(box, spacing=6)
         combo = QComboBox()
         combo.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         combo.setFont(font(10))
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        combo.setMinimumContentsLength(14)
+        combo.setMinimumContentsLength(12)
+        settings = icon_button("settings", size=38, icon_size=18)
         layout.addWidget(combo, 1)
-        if chip is not None:
-            layout.addWidget(chip)
-        return box, combo
+        layout.addWidget(settings)
+        return box, combo, settings
 
-    def set_enabled_look(self, on: bool) -> None:
-        effect = self.body.graphicsEffect()
-        if on and effect is not None:
-            self.body.setGraphicsEffect(None)
-        elif not on and effect is None:
-            dim = QGraphicsOpacityEffect(self.body)
-            dim.setOpacity(0.45)
-            self.body.setGraphicsEffect(dim)
-
-    def set_progress(self, show: bool, value: float, text: str) -> None:
-        if show and not self.progress_row.isVisible():
-            self.progress_row.show()
-            self.bar.set_value(0, animate=False)
-        self.progress_row.setVisible(show)
-        if show:
-            self.bar.set_value(value)
-            self.bar_text.setText(text)
+    def show_status(self, status: str, handled: int, total: int) -> None:
+        """The print button, or how its print is going: printing, waiting or just sent."""
+        if status in ("printing", "waiting"):
+            printing = status == "printing"
+            if self.action.currentIndex() != 1:
+                self.bar.set_value(0, animate=False)
+            self.action.setCurrentIndex(1)
+            self.spinner.setVisible(printing)
+            self.bar.setVisible(printing)
+            self.status_text.setText(t("sending") if printing else t("waiting"))
+            self.status_count.setText(f"{handled} / {total}" if printing and total else "")
+            if printing:
+                self.bar.set_value(handled / total if total else 0)
+            self.stop_button.setText(t("stop") if printing else t("cancel"))
+        elif status == "sent":
+            self.action.setCurrentIndex(2)
+            self.sent_label.setText("✓ " + t("card_sent"))
+        else:
+            self.action.setCurrentIndex(0)
 
 
 class MainWindow(QMainWindow):
@@ -388,6 +519,7 @@ class MainWindow(QMainWindow):
         root.setObjectName("root")
         root.setFocusPolicy(Qt.FocusPolicy.ClickFocus)   # clicking empty space clears focus
         self.setCentralWidget(root)
+        self.peek = PagePeek(self)
         layout = vbox(root, spacing=0)
         layout.addWidget(self._build_header())
         body = QWidget()
@@ -402,7 +534,6 @@ class MainWindow(QMainWindow):
         self.drawer = Drawer(root)
         self._build_drawer()
 
-        QShortcut(QKeySequence(QKeySequence.StandardKey.Print), self, activated=self._print)
         QShortcut(QKeySequence(QKeySequence.StandardKey.Open), self, activated=self.ask_files)
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.drawer.close_drawer)
 
@@ -484,6 +615,7 @@ class MainWindow(QMainWindow):
         self.list_area = QScrollArea()
         self.list_area.setWidgetResizable(True)
         self.list_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.list_area.verticalScrollBar().valueChanged.connect(lambda _v: self.peek.hide())
         holder = QWidget()
         self.list_layout = vbox(holder, (0, 0, 6, 0), 8)
         self.list_layout.addStretch(1)
@@ -505,11 +637,29 @@ class MainWindow(QMainWindow):
     def _build_right(self) -> QWidget:
         right = QWidget()
         right.setFixedWidth(RIGHT_WIDTH)
-        layout = vbox(right, spacing=10)
+        layout = vbox(right, spacing=8)
+        top = hbox(margins=(4, 0, 4, 0), spacing=8)
         self.where_title = label(size=8.5, bold=True)
         self.where_title.setProperty("section", True)
-        self.where_title.setContentsMargins(4, 0, 0, 0)
-        layout.addWidget(self.where_title)
+        top.addWidget(self.where_title, 1)
+        self.copies_label = label(size=8.5, bold=True)
+        self.copies_label.setProperty("section", True)
+        stepper = QFrame()
+        stepper.setProperty("box", True)
+        steps = hbox(stepper, (2, 2, 2, 2), 0)
+        self.fewer = icon_button("minus", size=30, icon_size=14, role="text")
+        self.more = icon_button("plus", size=30, icon_size=14, role="text")
+        self.copies_value = label(size=10.5, bold=True)
+        self.copies_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.copies_value.setMinimumWidth(30)
+        self.fewer.clicked.connect(lambda: self.c.set_copies(self.c.copies - 1))
+        self.more.clicked.connect(lambda: self.c.set_copies(self.c.copies + 1))
+        steps.addWidget(self.fewer)
+        steps.addWidget(self.copies_value)
+        steps.addWidget(self.more)
+        top.addWidget(self.copies_label)
+        top.addWidget(stepper)
+        layout.addLayout(top)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -524,30 +674,37 @@ class MainWindow(QMainWindow):
         cards.addStretch(1)
         scroll.setWidget(column)
         layout.addWidget(scroll, 1)
-        layout.addWidget(self._build_print_panel())
         return right
+
+    def _wire_card(self, card_: DestCard, dest: str, settings: QToolButton) -> None:
+        card_.print_button.clicked.connect(lambda: self.c.start_print(dest))
+        card_.stop_button.clicked.connect(lambda: self.c.stop_print(dest))
+        settings.clicked.connect(lambda: self.c.open_preferences(dest))
 
     def _build_a4(self) -> DestCard:
         self.a4 = DestCard("a4", "A4")
-        self.a4.switch.clicked.connect(lambda on: self.c.set_switch(A4_DEST, on))
         self.a4.reprint.clicked.connect(lambda: self.c.reset_done(A4_DEST))
         self.a4_duplex = ToggleChip()
         self.a4_duplex.clicked.connect(lambda on: self.c.set_duplex(A4_DEST, on))
-        box, self.a4_printer = self.a4.printer_row(self.a4_duplex)
+        self.a4_duplex.setFixedHeight(30)
+        self.a4.title_row.addWidget(self.a4_duplex)
+        box, self.a4_printer, self.a4_settings = self.a4.printer_row()
         self.a4_printer.activated.connect(lambda _i: self._pick_printer(A4_DEST, self.a4_printer))
         self.a4.body_layout.addWidget(box)
+        self._wire_card(self.a4, A4_DEST, self.a4_settings)
         return self.a4
 
     def _build_a3(self) -> DestCard:
         self.a3 = DestCard("a3", "A3")
-        self.a3.switch.clicked.connect(lambda on: self.c.set_switch(A3_DEST, on))
         self.a3.reprint.clicked.connect(lambda: self.c.reset_done(A3_DEST))
         self.a3_target = Segmented(["", ""])
         self.a3_target.picked.connect(lambda index: self.c.set_a3_to_plotter(index == 1))
         self.a3.body_layout.addWidget(self.a3_target, 0, Qt.AlignmentFlag.AlignLeft)
         self.a3_duplex = ToggleChip()
         self.a3_duplex.clicked.connect(lambda on: self.c.set_duplex(A3_DEST, on))
-        self.a3_printer_box, self.a3_printer = self.a3.printer_row(self.a3_duplex)
+        self.a3_duplex.setFixedHeight(30)
+        self.a3.title_row.addWidget(self.a3_duplex)
+        self.a3_printer_box, self.a3_printer, self.a3_settings = self.a3.printer_row()
         self.a3_printer.activated.connect(lambda _i: self._pick_printer(A3_DEST, self.a3_printer))
         self.a3.body_layout.addWidget(self.a3_printer_box)
         self.a3_note = QFrame()
@@ -560,12 +717,13 @@ class MainWindow(QMainWindow):
         note.addWidget(note_icon)
         note.addWidget(self.a3_note_text, 1)
         self.a3.body_layout.addWidget(self.a3_note)
+        self._wire_card(self.a3, A3_DEST, self.a3_settings)
         return self.a3
 
     def _build_plot(self) -> DestCard:
-        self.plot = DestCard("plot", badge_icon="roll")
-        self.plot.switch.clicked.connect(lambda on: self.c.set_switch(PLOT_DEST, on))
-        box, self.plot_printer = self.plot.printer_row()
+        self.plot = DestCard("plot", badge_icon="roll", role="plot")
+        self.plot.reprint.hide()
+        box, self.plot_printer, self.plot_settings = self.plot.printer_row()
         self.plot_printer.activated.connect(lambda _i: self._pick_printer(PLOT_DEST, self.plot_printer))
         self.plot.body_layout.addWidget(box)
 
@@ -588,99 +746,23 @@ class MainWindow(QMainWindow):
 
         self.roll_box = QFrame()
         self.roll_box.setProperty("box", True)
-        info = vbox(self.roll_box, (12, 10, 12, 10), 4)
-        self.roll_title = label(size=10.5, bold=True)
-        self.roll_info = label(muted=True, size=9.5, wrap=True)
+        info = vbox(self.roll_box, (12, 8, 12, 8), 3)
+        self.roll_info = label(size=9.5, wrap=True)
         self.roll_later = label(muted=True, size=9, wrap=True)
         self.roll_oversize = label(size=9, wrap=True)
         self.roll_oversize.setProperty("pill", "warn")
         self.replot = button("", "link")
+        self.replot.setMinimumHeight(20)
         self.replot.clicked.connect(lambda: self.c.reset_done(PLOT_DEST, self.c.opts.roll))
-        for widget in (self.roll_title, self.roll_info, self.roll_later, self.roll_oversize):
+        first = hbox(spacing=8)
+        first.addWidget(self.roll_info, 1)
+        first.addWidget(self.replot, 0, Qt.AlignmentFlag.AlignTop)
+        info.addLayout(first)
+        for widget in (self.roll_later, self.roll_oversize):
             info.addWidget(widget)
-        info.addWidget(self.replot, 0, Qt.AlignmentFlag.AlignLeft)
         self.plot.body_layout.addWidget(self.roll_box)
-
-        self.callout = QFrame()
-        self.callout.setProperty("callout", True)
-        callout = hbox(self.callout, (14, 12, 12, 12), 12)
-        texts = vbox(spacing=2)
-        self.next_title = label(size=10.5, bold=True)
-        self.next_text = label(muted=True, size=9.5, wrap=True)
-        texts.addWidget(self.next_title)
-        texts.addWidget(self.next_text)
-        self.next_button = button("", "plot")
-        self.next_button.clicked.connect(self._use_next_roll)
-        callout.addLayout(texts, 1)
-        callout.addWidget(self.next_button)
-        self.plot.body_layout.addWidget(self.callout)
-        self._next_roll: Optional[int] = None
-
-        self.plot_done = QLabel()
-        self.plot_done.setFont(font(9.5, True))
-        self.plot_done.setProperty("pill", "ok")
-        self.plot.body_layout.addWidget(self.plot_done, 0, Qt.AlignmentFlag.AlignLeft)
+        self._wire_card(self.plot, PLOT_DEST, self.plot_settings)
         return self.plot
-
-    def _build_print_panel(self) -> QFrame:
-        panel = card()
-        layout = hbox(panel, (12, 12, 12, 12), 12)
-        copies = vbox(spacing=4)
-        self.copies_label = label(muted=True, size=8.5, bold=True)
-        self.copies_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        stepper = QFrame()
-        stepper.setProperty("box", True)
-        steps = hbox(stepper, (2, 2, 2, 2), 0)
-        self.fewer = icon_button("minus", size=36, icon_size=16, role="text")
-        self.more = icon_button("plus", size=36, icon_size=16, role="text")
-        self.copies_value = label(size=11, bold=True)
-        self.copies_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.copies_value.setMinimumWidth(36)
-        self.fewer.clicked.connect(lambda: self.c.set_copies(self.c.copies - 1))
-        self.more.clicked.connect(lambda: self.c.set_copies(self.c.copies + 1))
-        steps.addWidget(self.fewer)
-        steps.addWidget(self.copies_value)
-        steps.addWidget(self.more)
-        copies.addStretch(1)
-        copies.addWidget(self.copies_label)
-        copies.addWidget(stepper)
-        copies.addStretch(1)
-        layout.addLayout(copies)
-
-        self.print_stack = QStackedWidget()
-        self.print_button = PrintButton()
-        self.print_button.clicked.connect(self._print)
-        self.print_stack.addWidget(self.print_button)
-
-        progress = QWidget()
-        prog = hbox(progress, (4, 0, 0, 0), 10)
-        texts = vbox(spacing=8)
-        line = hbox(spacing=8)
-        line.addWidget(Spinner())
-        self.sending_label = label(size=10.5, bold=True)
-        self.sending_count = label(muted=True, size=10, bold=True)
-        line.addWidget(self.sending_label, 1)
-        line.addWidget(self.sending_count)
-        texts.addStretch(1)
-        texts.addLayout(line)
-        self.total_bar = ProgressBar("accent", 8)
-        texts.addWidget(self.total_bar)
-        texts.addStretch(1)
-        prog.addLayout(texts, 1)
-        self.stop_button = button("", "ghost", "stop")
-        self.stop_button.clicked.connect(self.c.stop_print)
-        prog.addWidget(self.stop_button)
-        self.print_stack.addWidget(progress)
-
-        self.done_box = QLabel()
-        self.done_box.setTextFormat(Qt.TextFormat.RichText)
-        self.done_box.setProperty("pill", "ok")
-        self.done_box.setMinimumHeight(66)
-        self.done_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.print_stack.addWidget(self.done_box)
-        self.print_stack.setFixedHeight(68)
-        layout.addWidget(self.print_stack, 1)
-        return panel
 
     def _build_drawer(self) -> None:
         panel = self.drawer.panel
@@ -725,19 +807,6 @@ class MainWindow(QMainWindow):
         self.detect_button = button("", "ghost", "refresh")
         self.detect_button.clicked.connect(self.c.detect_printers)
         printers_box.addWidget(self.detect_button, 0, Qt.AlignmentFlag.AlignLeft)
-        self.prefs_title = label(size=10, bold=True)
-        self.prefs_hint = label(muted=True, size=9, wrap=True)
-        printers_box.addWidget(self.prefs_title)
-        printers_box.addWidget(self.prefs_hint)
-        prefs = hbox(spacing=8)
-        self.pref_buttons = {}
-        for dest in (A4_DEST, A3_DEST, PLOT_DEST):
-            btn = button("", "ghost", "external")
-            btn.clicked.connect(lambda _=False, dest=dest: self.c.open_preferences(dest))
-            prefs.addWidget(btn)
-            self.pref_buttons[dest] = btn
-        prefs.addStretch(1)
-        printers_box.addLayout(prefs)
 
         language_box = section("sec_language_title")
         self.language_choice = Segmented(["Hrvatski", "English"])
@@ -772,32 +841,28 @@ class MainWindow(QMainWindow):
         self.list_hint.setText(t("list_hint"))
         self.drop_overlay.text = t("drop_release")
         self.where_title.setText(t("where_title").upper())
+        self.copies_label.setText(t("copies").upper())
+        self.fewer.setToolTip(t("tip_fewer"))
+        self.more.setToolTip(t("tip_more"))
         self.a4.title.setText(t("a4_title"))
         self.a3.title.setText(t("a3_title"))
         self.plot.title.setText(t("plot_title"))
-        self.a4.switch.setToolTip(t("tip_switch_a4"))
-        self.a3.switch.setToolTip(t("tip_switch_a3"))
-        self.plot.switch.setToolTip(t("tip_switch_plot"))
         for combo in (self.a4_printer, self.a3_printer, self.plot_printer):
             combo.setPlaceholderText(t("choose_printer"))
             combo.setToolTip(t("printer"))
             combo.setAccessibleName(t("printer"))
+        for settings in (self.a4_settings, self.a3_settings, self.plot_settings):
+            settings.setToolTip(t("printer_settings"))
+            settings.setAccessibleName(t("printer_settings"))
         self.a4_duplex.setText(t("duplex"))
         self.a3_duplex.setText(t("duplex"))
         self.a4.reprint.setText(t("reprint"))
         self.a3.reprint.setText(t("reprint"))
-        self.plot.reprint.setText(t("replot"))
         self.a3_target.setToolTip(t("a3_target"))
         self.a3_target.set_labels([t("a3_on_printer"), t("a3_on_plotter")])
         self.a3_note_text.setText(t("a3_plotter_note"))
         self.roll_caption.setText(t("roll_label"))
         self.replot.setText(t("replot"))
-        self.next_title.setText(t("next_title"))
-        self.copies_label.setText(t("copies"))
-        self.fewer.setToolTip(t("tip_fewer"))
-        self.more.setToolTip(t("tip_more"))
-        self.sending_label.setText(t("sending"))
-        self.stop_button.setText(t("stop"))
         self.settings_title.setText(t("settings"))
         self.close_settings_button.setToolTip(t("close_settings"))
         self.sec_print_title.setText(t("sec_print").upper())
@@ -805,10 +870,6 @@ class MainWindow(QMainWindow):
         self.clear_done_hint.setText(t("clear_when_done_hint"))
         self.sec_printers_title.setText(t("sec_printers").upper())
         self.detect_button.setText(t("detect"))
-        self.prefs_title.setText(t("win_prefs"))
-        self.prefs_hint.setText(t("win_prefs_hint"))
-        for dest, key in ((A4_DEST, "A4"), (A3_DEST, "A3"), (PLOT_DEST, "plot_title")):
-            self.pref_buttons[dest].setText(t(key) if key == "plot_title" else key)
         self.sec_language_title.setText(t("language").upper())
         self.sec_log_title.setText(t("sec_log").upper())
         self.log_folder.setText(t("open_log_folder"))
@@ -817,6 +878,7 @@ class MainWindow(QMainWindow):
     # ── State → widgets ──────────────────────────────────────────────────────
 
     def _sync_rows(self) -> None:
+        self.peek.hide()
         entries = self.c.entries
         wanted = {id(e) for e in entries}
         for key in [k for k in self.rows if k not in wanted]:
@@ -855,16 +917,15 @@ class MainWindow(QMainWindow):
             if row is not None:
                 row.update_from(info, busy)
 
+        self.copies_value.setText(str(c.copies))
+        self.fewer.setEnabled(not busy and c.copies > 1)
+        self.more.setEnabled(not busy and c.copies < 99)
+
         # A4
-        self.a4.switch.setChecked(opts.a4_on)
-        self.a4.switch.setEnabled(not busy)
-        self.a4.set_enabled_look(opts.a4_on)
         if not plan.a4.total:
             summary = t("sum_no_a4")
         elif not plan.a4.pending:
             summary = t("sum_done", pages=count(plan.a4.total, "page"))
-        elif not opts.a4_on:
-            summary = t("sum_off", pages=count(plan.a4.pending, "page"))
         elif c.duplex[A4_DEST] and c.duplex_supported[A4_DEST]:
             summary = t("sum_sheets", pages=count(plan.a4.pending, "page"),
                         sheets=count(plan.a4_sheets, "sheet"))
@@ -872,24 +933,21 @@ class MainWindow(QMainWindow):
             summary = count(plan.a4.pending, "page")
         self.a4.summary.setText(summary)
         self._set_printer_combo(self.a4_printer, c.printers.a4, busy)
+        self.a4_settings.setEnabled(bool(c.printers.a4))
         self.a4_duplex.setVisible(c.duplex_supported[A4_DEST])
         self.a4_duplex.setChecked(c.duplex[A4_DEST])
         self.a4_duplex.setEnabled(not busy)
         self.a4.reprint.setVisible(plan.a4.total > 0 and not plan.a4.pending)
         self.a4.reprint.setEnabled(not busy)
+        self._update_action(self.a4, A4_DEST, plan)
 
         # A3
-        self.a3.switch.setChecked(opts.a3_on)
-        self.a3.switch.setEnabled(not busy)
-        self.a3.set_enabled_look(opts.a3_on)
         if not plan.a3_pages:
             summary = t("sum_no_a3")
         elif opts.a3_to_plotter:
-            summary = t("sum_a3_plotter" if opts.a3_on else "sum_off", pages=count(plan.a3_pages, "page"))
+            summary = t("sum_a3_plotter", pages=count(plan.a3_pages, "page"))
         elif not plan.a3.pending:
             summary = t("sum_done", pages=count(plan.a3.total, "page"))
-        elif not opts.a3_on:
-            summary = t("sum_off", pages=count(plan.a3.pending, "page"))
         else:
             summary = count(plan.a3.pending, "page")
         self.a3.summary.setText(summary)
@@ -897,30 +955,28 @@ class MainWindow(QMainWindow):
         self.a3_target.setEnabled(not busy)
         self.a3_printer_box.setVisible(not opts.a3_to_plotter)
         self.a3_note.setVisible(opts.a3_to_plotter)
+        self.a3.action.setVisible(not opts.a3_to_plotter)
         self._set_printer_combo(self.a3_printer, c.printers.a3, busy)
-        self.a3_duplex.setVisible(c.duplex_supported[A3_DEST])
+        self.a3_settings.setEnabled(bool(c.printers.a3))
+        self.a3_duplex.setVisible(c.duplex_supported[A3_DEST] and not opts.a3_to_plotter)
         self.a3_duplex.setChecked(c.duplex[A3_DEST])
         self.a3_duplex.setEnabled(not busy)
         self.a3.reprint.setVisible(not opts.a3_to_plotter and plan.a3.total > 0 and not plan.a3.pending)
         self.a3.reprint.setEnabled(not busy)
-        self.plot.reprint.hide()
+        self._update_action(self.a3, A3_DEST, plan)
 
         # plotter
-        self.plot.switch.setChecked(opts.plot_on)
-        self.plot.switch.setEnabled(not busy)
-        self.plot.set_enabled_look(opts.plot_on)
         pending_rolls = plan.pending_rolls()
         if not plan.plot_total:
             summary = t("plot_none")
         elif not plan.plot_pending:
             summary = t("plot_all_done", pages=count(plan.plot_total, "page"))
-        elif not opts.plot_on:
-            summary = t("sum_off", pages=count(plan.plot_pending, "page"))
         else:
             summary = t("plot_needs_one" if len(pending_rolls) == 1 else "plot_needs_many",
                         pages=count(plan.plot_pending, "page"), rolls=join_and(pending_rolls))
         self.plot.summary.setText(summary)
         self._set_printer_combo(self.plot_printer, c.printers.plotter, busy)
+        self.plot_settings.setEnabled(bool(c.printers.plotter))
         for width, chip in self.roll_chips.items():
             info = plan.rolls.get(width)
             total, pending = (info.total, info.pending) if info else (0, 0)
@@ -930,107 +986,68 @@ class MainWindow(QMainWindow):
             chip.setChecked(width == opts.roll)
             chip.setEnabled(not busy)
         current = plan.rolls.get(opts.roll)
-        current_pending = current.pending if current else 0
-        self.roll_title.setText(t("roll_title", w=opts.roll))
         self.replot.setVisible(False)
-        if not opts.plot_on:
-            info_text = t("roll_info_off")
-        elif not current or not current.total:
-            info_text = t("roll_info_empty")
+        if not current or not current.total:
+            info_text = t("roll_info_empty", w=opts.roll)
         elif not current.pending:
-            info_text = t("roll_info_done")
+            info_text = t("roll_info_done", w=opts.roll)
             self.replot.setVisible(True)
         else:
             lengths = ", ".join(f"{length} mm ×{n}" for length, n in sorted(current.lengths.items(), reverse=True))
-            info_text = t("roll_info", pages=count(current.pending, "page"),
+            info_text = t("roll_info", w=opts.roll, pages=count(current.pending, "page"),
                           meters=meters(current.pending_mm), lengths=lengths)
         self.roll_info.setText(info_text)
         self.replot.setEnabled(not busy)
         others = [w for w in pending_rolls if w != opts.roll]
-        self.roll_later.setVisible(bool(opts.plot_on and current_pending and others))
-        self.roll_later.setText(t("roll_later", rolls=join_and(others)))
+        if current and current.pending:
+            later = t("roll_later", rolls=join_and(others)) if others else ""
+        else:
+            nxt = plan.next_roll(opts.roll)
+            later = t("roll_next", w=nxt, pages=count(plan.rolls[nxt].pending, "page")) if nxt else ""
+        self.roll_later.setVisible(bool(later))
+        self.roll_later.setText(later)
         self.roll_oversize.setVisible(plan.oversize > 0)
         self.roll_oversize.setText(t("roll_oversize", pages=count(plan.oversize, "page")))
-        self._next_roll = plan.next_roll(opts.roll) if opts.plot_on and not current_pending else None
-        show_next = self._next_roll is not None
-        if show_next and not self.callout.isVisible():
-            self.callout.show()
-            fade_in(self.callout)
-            QTimer.singleShot(60, self, lambda: self.right_scroll.ensureWidgetVisible(self.callout, 0, 16))
-        self.callout.setVisible(show_next)
-        if show_next:
-            self.next_text.setText(t("next_text", w=self._next_roll,
-                                     pages=count(plan.rolls[self._next_roll].pending, "page")))
-            self.next_button.setText(t("next_button", w=self._next_roll))
-            self.next_button.setEnabled(not busy)
-        self.plot_done.setVisible(bool(opts.plot_on and plan.plot_total and not plan.plot_pending))
-        self.plot_done.setText("✓ " + t("plot_done_pill"))
-
-        # progress on the cards
-        for dest, card_ in ((A4_DEST, self.a4), (A3_DEST, self.a3), (PLOT_DEST, self.plot)):
-            total = c.totals.get(dest, 0)
-            show = c.job_state in ("printing", "done") and total > 0
-            done = c.job_state == "done" or c.handled[dest] >= total
-            value = 1.0 if c.job_state == "done" else (c.handled[dest] / total if total else 0)
-            card_.set_progress(show, value, t("card_sent") if done else t("card_sending"))
-
-        # print panel
-        self.copies_value.setText(str(c.copies))
-        self.fewer.setEnabled(not busy and c.copies > 1)
-        self.more.setEnabled(not busy and c.copies < 99)
-        title, sub, enabled = self._print_texts(plan, show_next)
-        self.print_button.set_texts(title, sub)
-        self.print_button.setEnabled(enabled)
-        if c.job_state == "printing":
-            self.print_stack.setCurrentIndex(1)
-            total = sum(c.totals.values())
-            handled = sum(c.handled.values())
-            self.sending_count.setText(f"{handled} / {total}")
-            self.total_bar.set_value(handled / total if total else 0)
-        elif c.job_state == "done":
-            self.print_stack.setCurrentIndex(2)
-            title = t("card_sent") if self._next_roll else t("sent_all")
-            text = f"<div style='font-size:12.5pt'>✓ {escape(title)}</div>"
-            if self._next_roll:
-                text += f"<div style='font-size:9.5pt; font-weight:500'>{escape(t('sent_next', w=self._next_roll))}</div>"
-            self.done_box.setText(text)
-        else:
-            self.print_stack.setCurrentIndex(0)
-            self.total_bar.set_value(0, animate=False)
+        self._update_action(self.plot, PLOT_DEST, plan)
 
         self.clear_done.setChecked(c.settings.clear_when_done)
         self.language_choice.set_index(0 if get_language() == "hr" else 1)
         if self._close_pending and not busy:
             QTimer.singleShot(0, self, self.close)
 
-    def _print_texts(self, plan, show_next: bool) -> tuple[str, str, bool]:
+    def _update_action(self, card_: DestCard, dest: str, plan) -> None:
+        """The card's print button with what it will print, or why it cannot."""
         c = self.c
-        copies = f" · {count(c.copies, 'copy')}" if c.copies > 1 else ""
-        if not c.entries:
-            return t("print"), t("sub_add"), False
+        status = c.status(dest)
+        card_.show_status(status, c.handled[dest], c.totals[dest])
+        if status != "idle":
+            return
+        plot = dest == PLOT_DEST
+        pages = c.pages_for(plan, dest)
+        icon = "printer"
         if c.reading:
-            return t("print"), t("sub_reading"), False
-        if not plan.included:
-            if not plan.pending:
-                return t("all_printed"), t("sub_all_done"), False
-            if show_next:
-                return t("print"), t("sub_change_roll", w=self._next_roll), False
-            return t("print"), t("sub_nothing"), False
-        missing = c.missing_printer(plan)
-        if missing:
-            return t("print"), t("sub_pick_printer", target=t(f"target_{missing}")), False
-        if not plan.a4.included and not plan.a3.included:
-            return (t("plot_on_roll", w=c.opts.roll),
-                    t("sub_plot", pages=count(plan.plot_included, "page"),
-                      meters=meters(plan.plot_included_mm)) + copies, True)
-        parts = []
-        if plan.a4.included:
-            parts.append(f"A4 {plan.a4.included}")
-        if plan.a3.included:
-            parts.append(f"A3 {plan.a3.included}")
-        if plan.plot_included:
-            parts.append(t("sub_part_roll", w=c.opts.roll, n=plan.plot_included))
-        return t("print"), " · ".join(parts) + copies, True
+            text = t("btn_reading")
+        elif pages and not c.printer_for(dest):
+            text = t("btn_pick_printer")
+        elif pages:
+            text = t("btn_plot" if plot else "btn_print", pages=count(pages, "page_acc"))
+            if c.copies > 1:
+                text += f" · {count(c.copies, 'copy')}"
+        elif plot:
+            current = plan.rolls.get(c.opts.roll)
+            if current and current.total:
+                text, icon = t("btn_roll_done", w=c.opts.roll), "check"
+            elif plan.plot_pending:
+                text = t("btn_roll_empty", w=c.opts.roll)
+            elif plan.plot_total:
+                text, icon = t("btn_all_done"), "check"
+            else:
+                text = t("btn_plot_empty")
+        else:
+            done = (plan.a4 if dest == A4_DEST else plan.a3).total
+            text, icon = (t("btn_all_done"), "check") if done else (t("btn_print_empty"), "printer")
+        card_.print_button.set_content(text, icon)
+        card_.print_button.setEnabled(bool(pages) and not c.reading and bool(c.printer_for(dest)))
 
     def _fill_printers(self) -> None:
         for combo, current in ((self.a4_printer, self.c.printers.a4), (self.a3_printer, self.c.printers.a3),
@@ -1059,10 +1076,10 @@ class MainWindow(QMainWindow):
     def _pick_printer(self, dest: str, combo: QComboBox) -> None:
         self.c.set_printer(dest, combo.currentText())
 
-    def _picture_ready(self, path: str, page_index: int) -> None:
+    def _picture_ready(self, path: str, page_index: int, px: int) -> None:
         for row in self.rows.values():
             if row.entry.path == path:
-                row.picture_ready(page_index)
+                row.picture_ready(page_index, px)
 
     def _append_log(self, message: str, level: str) -> None:
         mark = {"error": "✖ ", "warn": "! ", "ok": "✓ "}.get(level, "  ")
@@ -1076,19 +1093,12 @@ class MainWindow(QMainWindow):
         if paths:
             self.c.add_paths(paths)
 
-    def _print(self) -> None:
-        if not self.drawer.is_open and self.print_button.isEnabled():
-            self.c.start_print()
-
-    def _use_next_roll(self) -> None:
-        if self._next_roll is not None:
-            self.c.set_roll(self._next_roll)
-
     def _set_clear_when_done(self, on: bool) -> None:
         self.c.settings.clear_when_done = on
         self.c._save()
 
     def open_settings(self) -> None:
+        self.peek.hide()
         self.drawer.open_drawer()
         self.toast.raise_()   # a message still showing stays readable above the drawer
 
@@ -1133,6 +1143,7 @@ class MainWindow(QMainWindow):
             self.c.add_paths(paths)
 
     def _show_drop(self, on: bool) -> None:
+        self.peek.hide()
         set_prop(self.files_card, "drag", on)
         set_prop(self.dropzone, "drag", on)
         if on and self.c.entries:
@@ -1157,6 +1168,11 @@ class MainWindow(QMainWindow):
         self.c._save()
         event.accept()
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and not self.isActiveWindow():
+            self.peek.hide()
+
     def showEvent(self, event):
         super().showEvent(event)
         self.centralWidget().setFocus(Qt.FocusReason.OtherFocusReason)   # no ring on a button at start
@@ -1164,6 +1180,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         root = self.centralWidget()
+        self.peek.hide()
         if self.drawer.isVisible():
             self.drawer.setGeometry(root.rect())
         if self.toast.isVisible():
