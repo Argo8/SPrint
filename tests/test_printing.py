@@ -24,6 +24,7 @@ class FakeDevMode:
 class FakeWin32Print:
     def __init__(self, reject_custom=False, max_copies=999):
         self.devmode = FakeDevMode(PaperSize=1, Fields=printing.DM_PAPERWIDTH)
+        self.user_devmode = None   # this user's printing preferences, if changed
         self.reject_custom = reject_custom
         self.max_copies = max_copies
         self.open_handles = 0
@@ -40,6 +41,8 @@ class FakeWin32Print:
         self.open_handles -= 1
 
     def GetPrinter(self, handle, level):
+        if level == 9:
+            return {"pDevMode": copy.copy(self.user_devmode)}
         assert level == 2
         return {"pDevMode": copy.copy(self.devmode), "pPortName": "USB001"}
 
@@ -95,6 +98,16 @@ def test_job_settings_named_paper(fake, paper, paper_id):
 def test_job_settings_keeps_paper_when_none_given(fake):
     fake()
     assert printing.job_settings("Office").PaperSize == 1
+
+
+def test_job_settings_start_from_this_users_preferences(fake):
+    win32 = fake()
+    win32.user_devmode = FakeDevMode(PaperSize=5, Duplex=printing.DMDUP_VERTICAL, Fields=printing.DM_DUPLEX)
+    assert printing.job_settings("Office").PaperSize == 5
+    assert printing.default_duplex("Office")
+    win32.user_devmode = None
+    assert printing.job_settings("Office").PaperSize == 1
+    assert not printing.default_duplex("Office")
 
 
 def test_job_settings_duplex(fake):

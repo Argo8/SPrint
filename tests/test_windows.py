@@ -57,6 +57,28 @@ def test_job_settings_leave_the_printer_alone(builtin_printer):
     assert printer_paper(builtin_printer) == before
 
 
+def test_job_settings_use_this_users_printing_preferences(builtin_printer):
+    """What the printer's settings dialog (the ⚙ button) changes reaches SPrint's jobs."""
+    handle = win32print.OpenPrinter(builtin_printer, {"DesiredAccess": win32print.PRINTER_ACCESS_USE})
+    try:
+        before = win32print.GetPrinter(handle, 9)["pDevMode"]
+        mine = win32print.GetPrinter(handle, 2)["pDevMode"]
+        landscape = 3 - mine.Orientation   # the other orientation
+        mine.Orientation = landscape
+        mine.Fields |= printing.DM_ORIENTATION
+        win32print.SetPrinter(handle, 9, {"pDevMode": mine}, 0)
+        try:
+            assert printing.job_settings(builtin_printer).Orientation == landscape
+        finally:
+            if before is not None:
+                win32print.SetPrinter(handle, 9, {"pDevMode": before}, 0)
+            else:
+                mine.Orientation = 3 - landscape
+                win32print.SetPrinter(handle, 9, {"pDevMode": mine}, 0)
+    finally:
+        win32print.ClosePrinter(handle)
+
+
 def boxed_pdf(make_pdf, name, size_mm):
     """A page with a black square near its top-left corner."""
     def draw(_, page, writer):

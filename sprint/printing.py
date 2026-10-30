@@ -136,12 +136,22 @@ def supports_duplex(printer: str) -> bool:
     return _capability(printer, DC_DUPLEX) == 1
 
 
+def _user_settings(handle):
+    """This user's printing preferences for the printer (what its settings dialog
+    changes), or the printer's defaults when the user has not changed any."""
+    try:
+        devmode = win32print.GetPrinter(handle, 9)["pDevMode"]
+    except Exception:
+        devmode = None
+    return devmode if devmode is not None else win32print.GetPrinter(handle, 2)["pDevMode"]
+
+
 def default_duplex(printer: str) -> bool:
     """Whether the printer prints two-sided by default (its printing preferences)."""
     try:
         handle = win32print.OpenPrinter(printer)
         try:
-            devmode = win32print.GetPrinter(handle, 2)["pDevMode"]
+            devmode = _user_settings(handle)
         finally:
             win32print.ClosePrinter(handle)
         return bool(devmode and devmode.Fields & DM_DUPLEX and devmode.Duplex > DMDUP_SIMPLEX)
@@ -239,7 +249,7 @@ def job_settings(printer: str, paper: Optional[Paper] = None, copies: int = 1,
     _require_windows()
     handle = win32print.OpenPrinter(printer)
     try:
-        devmode = win32print.GetPrinter(handle, 2)["pDevMode"]
+        devmode = _user_settings(handle)
         if devmode is None:
             raise PrintError("the printer driver returned no settings")
         paper_id = None
