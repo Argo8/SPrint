@@ -183,6 +183,37 @@ def test_a_waiting_print_can_be_cancelled(qtbot, window, project, services):
     assert [c[1] for c in services.backend.calls] == ["bill.pdf", "offer.pdf"]
 
 
+def test_a_file_changed_while_its_print_waits_is_read_again_first(qtbot, window, project, services):
+    load(qtbot, window, project)
+    messages = []
+    window.c.toast.connect(lambda text, kind: messages.append(text))
+    services.backend.gate = threading.Event()
+    qtbot.mouseClick(window.a4.print_button, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(window.plot.print_button, Qt.MouseButton.LeftButton)
+    stamp = window.c.entries[0].stamp   # plan.pdf, the plotter's pages
+    os.utime(project[0], ns=(stamp[0] + 5_000_000_000, stamp[0] + 5_000_000_000))
+    services.backend.gate.set()
+    qtbot.waitUntil(lambda: not window.c.busy and window.c.reading == 0, timeout=10000)
+    assert services.plot_backend.calls == []
+    assert messages[-1] == "plan.pdf changed and was read again: check it and print again"
+    assert window.plot.print_button.text() == "Plot 2 pages"
+
+
+def test_a_page_that_cannot_be_drawn_is_not_tried_again(qtbot, window, project, monkeypatch):
+    tries = []
+
+    def cannot_draw(path, index, px):
+        tries.append((index, px))
+        raise RuntimeError("damaged page")
+    monkeypatch.setattr(controller_module, "render_preview", cannot_draw)
+    load(qtbot, window, [project[4]])
+    qtbot.waitUntil(lambda: len(tries) > 0, timeout=5000)
+    for _ in range(3):
+        qtbot.wait(100)
+        window.refresh()
+    assert len(tries) == 1
+
+
 def test_skip_a_page(qtbot, window, project):
     load(qtbot, window, project[:2])
     row = window.rows[id(window.c.entries[1])]

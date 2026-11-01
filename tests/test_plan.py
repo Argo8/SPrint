@@ -1,6 +1,9 @@
-from sprint.paper import DocInfo, PageInfo
+import random
+from collections import Counter
+
+from sprint.paper import ROLL_WIDTHS_MM, DocInfo, PageInfo
 from sprint.plan import (A3_DEST, A4_DEST, PLOT_DEST, Entry, Options, build_plan, mark_done,
-                         reset_done)
+                         reset_done, route_of)
 
 A4P, A4L, A3P, A3L = (210, 297), (297, 210), (297, 420), (420, 297)
 A1, A2, A0 = (841, 594), (594, 420), (1189, 841)
@@ -113,3 +116,47 @@ def test_oversize_pages_go_on_the_widest_roll():
     assert plan.oversize == 1
     assert plan.entries[0].routes[0].oversize
     assert [(r.width_mm, r.length_mm) for r in plan.plot_runs] == [(914, 1371)]
+
+
+def test_every_page_is_printed_exactly_once():
+    """Press every print button, plotting roll after roll: each page that is not
+    skipped goes out once, to where its size says, on paper as wide as its roll."""
+    rnd = random.Random(2026)
+    sizes = [A4P, A4L, A3P, A3L, A1, A2, A0, (148, 210), (297, 630), (610, 1000), (1000, 1500),
+             (213.5, 297), (594, 841), (420, 1189)]
+    for _ in range(200):
+        entries = [entry(f"f{n}.pdf", *rnd.choices(sizes, k=rnd.randint(1, 6))) for n in range(rnd.randint(1, 5))]
+        for e in entries:
+            for state in e.states:
+                state.skip = rnd.random() < 0.15
+        opts = Options(a3_to_plotter=rnd.random() < 0.3, roll=rnd.choice(ROLL_WIDTHS_MM))
+        printed = Counter()
+
+        def send(parts, dest, roll=None):
+            for part in parts:
+                for pos in part.pages:
+                    page = entries[part.entry].doc.pages[pos]
+                    route = route_of(page, opts)
+                    assert route.dest == dest and (roll is None or route.roll == roll)
+                    printed[(part.entry, pos)] += 1
+            mark_done(entries, parts)
+
+        plan = build_plan(entries, opts)
+        send(plan.a4_parts, A4_DEST)
+        send(plan.a3_parts, A3_DEST)
+        while True:
+            plan = build_plan(entries, opts)
+            for run in plan.plot_runs:
+                assert run.width_mm == opts.roll
+                send(run.parts, PLOT_DEST, opts.roll)
+            plan = build_plan(entries, opts)
+            assert plan.plot_included == 0          # this roll is done
+            nxt = plan.next_roll(opts.roll)
+            if nxt is None:
+                break
+            opts.roll = nxt                          # load the next roll
+
+        plan = build_plan(entries, opts)
+        assert plan.pending == 0
+        wanted = {(n, pos) for n, e in enumerate(entries) for pos, s in enumerate(e.states) if not s.skip}
+        assert set(printed) == wanted and set(printed.values()) <= {1}
