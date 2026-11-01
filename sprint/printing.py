@@ -21,13 +21,14 @@ import time
 from typing import Optional, Union
 
 try:
+    import pywintypes
     import win32gui
     import win32print
 except ImportError:  # not on Windows (tests, development)
-    win32gui = win32print = None
+    pywintypes = win32gui = win32print = None
 
-from .paper import PT_TO_MM
-from .pdfdocs import PDFIUM_LOCK, read_document
+from .paper import MAX_PAPER_MM, PT_TO_MM
+from .pdfdocs import PDFIUM_LOCK, load_flat_page, read_document
 from .settings import app_dir
 
 log = logging.getLogger(__name__)
@@ -61,8 +62,9 @@ PHYSICALWIDTH, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY = 110, 111, 112,
 # FPDF_RenderPage flags: annotations, print quality, text as outlines (no GDI font lookups)
 RENDER_FLAGS = 0x01 | 0x800 | 0x04
 
-#: Paper sizes drivers know by name (portrait, mm) -> Windows paper ID.
-#: Named sizes are understood by more drivers than a custom width/length.
+#: Paper sizes drivers know by name (portrait, mm) -> Windows paper ID. A4/A3
+#: printers get these; a plot asks for its exact size first and falls back to
+#: one of these only when the driver has no custom sizes.
 STANDARD_PAPER = {(210, 297): 9, (297, 420): 8, (420, 594): 66}   # A4, A3, A2
 NAMED_PAPER_MM = {"A4": (210, 297), "A3": (297, 420)}
 
@@ -146,6 +148,22 @@ def _user_settings(handle):
     return devmode if devmode is not None else win32print.GetPrinter(handle, 2)["pDevMode"]
 
 
+def _driver_sized(handle, printer: str, devmode):
+    """``devmode`` in a buffer as large as the driver writes now: settings saved by
+    an older version of the driver can be smaller, and the driver would write past
+    their end."""
+    try:
+        needed = win32print.DocumentProperties(None, handle, printer, None, None, 0)
+        if needed <= devmode.Size + devmode.DriverExtra:
+            return devmode
+        buffer = pywintypes.DEVMODEType(needed - devmode.Size)
+        win32print.DocumentProperties(None, handle, printer, buffer, devmode, DM_IN_BUFFER | DM_OUT_BUFFER)
+        return buffer
+    except Exception:
+        log.debug("Cannot size the settings buffer of %s", printer, exc_info=True)
+        return devmode
+
+
 def default_duplex(printer: str) -> bool:
     """Whether the printer prints two-sided by default (its printing preferences)."""
     try:
@@ -159,19 +177,35 @@ def default_duplex(printer: str) -> bool:
         return False
 
 
-def _paper_capabilities(printer: str) -> tuple[set[int], float]:
-    """Paper IDs the driver offers and the widest paper's short side in mm."""
+def _driver_papers(printer: str) -> tuple[list[int], list[tuple[float, float]]]:
+    """The driver's paper IDs and their sizes in mm, in the same order."""
     port = None
     try:
         port = _port(printer)
     except Exception:
         pass
-    ids = set(_capability(printer, DC_PAPERS, port) or ())
-    widest = 0.0
+    ids = list(_capability(printer, DC_PAPERS, port) or ())
+    sizes = []
     for size in _capability(printer, DC_PAPERSIZE, port) or ():
         x, y = (size["x"], size["y"]) if isinstance(size, dict) else tuple(size)[:2]
-        widest = max(widest, min(x, y) / 10)   # tenths of a millimetre
-    return ids, widest
+        sizes.append((x / 10, y / 10))   # tenths of a millimetre
+    return ids, sizes
+
+
+def _paper_capabilities(printer: str) -> tuple[set[int], float]:
+    """Paper IDs the driver offers and the widest paper's short side in mm."""
+    ids, sizes = _driver_papers(printer)
+    return set(ids), max((min(size) for size in sizes), default=0.0)
+
+
+def _is_paper_of_size(printer: str, paper_id: int, size_mm: tuple) -> bool:
+    """Whether the driver's paper ``paper_id`` has this size (some drivers swap a
+    custom size for a paper of theirs that has the same size)."""
+    ids, sizes = _driver_papers(printer)
+    if paper_id not in ids or len(sizes) != len(ids):
+        return False
+    have = sorted(sizes[ids.index(paper_id)])
+    return all(abs(a - b) <= 1.0 for a, b in zip(have, sorted(size_mm)))
 
 
 def is_virtual_printer(name: str) -> bool:
@@ -244,41 +278,63 @@ def job_settings(printer: str, paper: Optional[Paper] = None, copies: int = 1,
     paper size, copies and (unless None) one- or two-sided printing of one job.
     Nothing is saved to the printer.
 
-    Raises PrintError if the driver does not accept the paper size.
+    A plot (``paper`` as width and length) asks for exactly that size, and for a
+    standard paper of that size if the driver has no custom sizes. Raises
+    PrintError if the driver accepts neither.
     """
     _require_windows()
+    if paper is None:
+        papers = [None]
+    elif isinstance(paper, str):
+        papers = [(STANDARD_PAPER[NAMED_PAPER_MM[paper]], NAMED_PAPER_MM[paper])]
+    else:
+        width, length = paper
+        if round(max(width, length) * 10) > MAX_PAPER_MM * 10:
+            raise PrintError(f"{width:g}×{length:g} mm: Windows cannot send paper longer than {MAX_PAPER_MM} mm")
+        papers = [(DMPAPER_USER, paper)]
+        standard = STANDARD_PAPER.get((round(width), round(length)))
+        if standard is not None:
+            papers.append((standard, paper))
     handle = win32print.OpenPrinter(printer)
     try:
-        devmode = _user_settings(handle)
-        if devmode is None:
-            raise PrintError("the printer driver returned no settings")
-        paper_id = None
-        if paper is not None:
-            width, length = NAMED_PAPER_MM.get(paper, paper)
-            paper_id = STANDARD_PAPER.get((round(width), round(length)), DMPAPER_USER)
-            devmode.Orientation = DMORIENT_PORTRAIT
-            devmode.PaperSize = paper_id
-            devmode.Fields |= DM_ORIENTATION | DM_PAPERSIZE
-            if paper_id == DMPAPER_USER:
-                devmode.PaperWidth = round(width * 10)     # tenths of a millimetre
-                devmode.PaperLength = round(length * 10)
-                devmode.Fields |= DM_PAPERWIDTH | DM_PAPERLENGTH
-            else:
-                devmode.Fields &= ~(DM_PAPERWIDTH | DM_PAPERLENGTH)
-        devmode.Copies = copies
-        devmode.Collate = DMCOLLATE_TRUE
-        devmode.Fields |= DM_COPIES | DM_COLLATE
-        if duplex is not None:
-            devmode.Duplex = DMDUP_VERTICAL if duplex else DMDUP_SIMPLEX
-            devmode.Fields |= DM_DUPLEX
-        # Let the driver validate the request; it may adjust it to what it supports.
-        win32print.DocumentProperties(None, handle, printer, devmode, devmode,
-                                      DM_IN_BUFFER | DM_OUT_BUFFER)
-        if paper_id is not None and devmode.PaperSize != paper_id:
-            raise PrintError(f"the driver does not accept {width:g}×{length:g} mm paper")
-        return devmode
+        for choice in papers:
+            stored = _user_settings(handle)   # a fresh copy for every try
+            if stored is None:
+                raise PrintError("the printer driver returned no settings")
+            devmode = _driver_sized(handle, printer, stored)
+            if _ask_driver(handle, printer, devmode, choice, copies, duplex):
+                return devmode
+        width, length = papers[0][1]
+        raise PrintError(f"the driver does not accept {width:g}×{length:g} mm paper")
     finally:
         win32print.ClosePrinter(handle)
+
+
+def _ask_driver(handle, printer: str, devmode, paper: Optional[tuple], copies: int,
+                duplex: Optional[bool]) -> bool:
+    """Put the job's settings into ``devmode`` and let the driver check them; False
+    if it does not take the paper (``paper``: Windows paper ID and size in mm)."""
+    if paper is not None:
+        paper_id, (width, length) = paper
+        devmode.Orientation = DMORIENT_PORTRAIT
+        devmode.PaperSize = paper_id
+        devmode.Fields |= DM_ORIENTATION | DM_PAPERSIZE
+        if paper_id == DMPAPER_USER:
+            devmode.PaperWidth = round(width * 10)     # tenths of a millimetre
+            devmode.PaperLength = round(length * 10)
+            devmode.Fields |= DM_PAPERWIDTH | DM_PAPERLENGTH
+        else:
+            devmode.Fields &= ~(DM_PAPERWIDTH | DM_PAPERLENGTH)
+    devmode.Copies = copies
+    devmode.Collate = DMCOLLATE_TRUE
+    devmode.Fields |= DM_COPIES | DM_COLLATE
+    if duplex is not None:
+        devmode.Duplex = DMDUP_VERTICAL if duplex else DMDUP_SIMPLEX
+        devmode.Fields |= DM_DUPLEX
+    # The driver may adjust the request to what it supports.
+    win32print.DocumentProperties(None, handle, printer, devmode, devmode, DM_IN_BUFFER | DM_OUT_BUFFER)
+    return paper is None or devmode.PaperSize == paper_id or _is_paper_of_size(printer, devmode.PaperSize,
+                                                                            (width, length))
 
 
 def place_page(size_mm, sheet_px, offset_px, printable_px, dpi) -> tuple[int, int, int, int, int]:
@@ -291,8 +347,9 @@ def place_page(size_mm, sheet_px, offset_px, printable_px, dpi) -> tuple[int, in
     """
     w_mm, h_mm = size_mm
     sheet_w, sheet_h = sheet_px
+    across, down = sheet_w / dpi[0], sheet_h / dpi[1]   # inches: a printer's dpi may differ by axis
     rotate = 0
-    if (w_mm > h_mm and sheet_w < sheet_h) or (w_mm < h_mm and sheet_w > sheet_h):
+    if (w_mm > h_mm and across < down) or (w_mm < h_mm and across > down):
         w_mm, h_mm, rotate = h_mm, w_mm, 1          # 1 = 90° clockwise
     width, height = w_mm / 25.4 * dpi[0], h_mm / 25.4 * dpi[1]
     scale = min(1.0, printable_px[0] / width, printable_px[1] / height)
@@ -329,7 +386,7 @@ class DirectBackend(Backend):
 
     def print_file(self, printer, path, copies=1, paper=None, duplex=None):
         devmode = job_settings(printer, paper, copies, duplex)
-        if isinstance(paper, tuple) and devmode.PaperSize == DMPAPER_USER:
+        if isinstance(paper, tuple):
             devmode = _room_for_margins(printer, paper, copies, devmode)
         sizes = {p.index: (p.width_mm, p.height_mm) for p in read_document(path).pages}
         with PDFIUM_LOCK:
@@ -351,7 +408,7 @@ class DirectBackend(Backend):
                     win32print.StartDoc(hdc, (name, None, None, 0))
                     try:
                         for index in range(len(pdf)):
-                            page = pdf[index]
+                            page = load_flat_page(pdf, index, for_print=True)
                             try:
                                 size = sizes.get(index) or tuple(v * PT_TO_MM for v in page.get_size())
                                 win32print.StartPage(hdc)

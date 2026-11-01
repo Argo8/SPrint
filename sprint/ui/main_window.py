@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QFrame, QGr
 
 from .. import APP_NAME, AUTHOR, __version__
 from ..i18n import count, get_language, join_and, meters, set_language, t
-from ..paper import A3, A4, ROLL_WIDTHS_MM
+from ..paper import A3, A4, MAX_PAPER_MM, ROLL_WIDTHS_MM
 from ..plan import A3_DEST, A4_DEST, PLOT_DEST, Entry
 from ..settings import data_dir
 from . import icons
@@ -262,6 +262,8 @@ class FileRow(QFrame):
             chips.append((t("chip_done_part", done=info.done, total=info.active), "done"))
         if any(route.oversize for route in info.routes):
             chips.append((t("chip_oversize"), "warn"))
+        if any(route.dest == PLOT_DEST and route.length_mm > MAX_PAPER_MM for route in info.routes):
+            chips.append((t("chip_too_long"), "warn"))
         if doc.page_errors:
             chips.append((count(len(doc.page_errors), "bad_page"), "warn"))
         self.header.set_chips(chips)

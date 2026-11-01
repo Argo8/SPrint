@@ -30,6 +30,8 @@ SIZE_TOLERANCE_MM = 3.0
 
 #: Roll widths the plotter takes, in mm.
 ROLL_WIDTHS_MM = (297, 420, 610, 914)
+#: Windows keeps a custom paper size in tenths of a millimetre in a 16-bit number.
+MAX_PAPER_MM = 3276
 
 #: A3 pages on the plotter: always a whole A3 sheet off the 297 mm roll.
 A3_ROLL_MM, A3_LENGTH_MM = 297, 420

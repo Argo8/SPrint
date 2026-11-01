@@ -137,6 +137,24 @@ def file_for_pages(doc: DocInfo, indices: list[int], temp_dir: str, label: str) 
     return target
 
 
+FLAT_NORMALDISPLAY, FLAT_PRINT = 0, 1
+FLATTEN_SUCCESS = 1
+
+
+def load_flat_page(pdf, index: int, for_print: bool):
+    """Page ``index`` of a pypdfium2 document with its form fields and annotations
+    drawn into its content. PDFium leaves form fields (filled-in fields, visible
+    signatures) out when it draws a page; flattening keeps them. Only the copy in
+    memory changes, never the file."""
+    import pypdfium2.raw as pdfium_c
+
+    page = pdf[index]
+    if pdfium_c.FPDFPage_Flatten(page.raw, FLAT_PRINT if for_print else FLAT_NORMALDISPLAY) == FLATTEN_SUCCESS:
+        page.close()
+        page = pdf[index]   # load it again with its new content
+    return page
+
+
 def render_preview(path: str, page_index: int, max_px: int) -> tuple[int, int, bytes]:
     """A small picture of one page: (width, height, RGBA bytes), the long side ``max_px``."""
     import pypdfium2 as pdfium
@@ -145,7 +163,7 @@ def render_preview(path: str, page_index: int, max_px: int) -> tuple[int, int, b
     with PDFIUM_LOCK:
         pdf = pdfium.PdfDocument(path)
         try:
-            page = pdf[page_index]
+            page = load_flat_page(pdf, page_index, for_print=False)
             try:
                 scale = max_px / max(page.get_size())
                 bitmap = page.render(scale=scale, force_bitmap_format=pdfium_c.FPDFBitmap_BGRA,

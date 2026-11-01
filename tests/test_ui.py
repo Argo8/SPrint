@@ -214,6 +214,12 @@ def test_a_page_that_cannot_be_drawn_is_not_tried_again(qtbot, window, project, 
     assert len(tries) == 1
 
 
+def test_plots_longer_than_windows_allows_are_flagged(qtbot, window, make_pdf):
+    load(qtbot, window, [make_pdf("profile.pdf", [(900, 4000)])])
+    row = window.rows[id(window.c.entries[0])]
+    assert "longer than 3.27 m · Windows cannot plot it" in [w.text() for w in row.header._chip_labels()]
+
+
 def test_skip_a_page(qtbot, window, project):
     load(qtbot, window, project[:2])
     row = window.rows[id(window.c.entries[1])]

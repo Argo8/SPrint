@@ -13,13 +13,14 @@ import time
 import pytest
 from pypdf.generic import DecodedStreamObject, NameObject
 
-from conftest import MM
+from conftest import MM, add_signature
 from sprint import printing
 from sprint.pdfdocs import read_document
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="needs Windows")
 
 if sys.platform == "win32":
+    import pywintypes
     import win32print
 
 BUILTIN_PRINTER = "Microsoft Print to PDF"
@@ -79,6 +80,22 @@ def test_job_settings_use_this_users_printing_preferences(builtin_printer):
         win32print.ClosePrinter(handle)
 
 
+def test_job_settings_with_settings_saved_by_an_older_driver(builtin_printer, monkeypatch):
+    """Settings smaller than what the driver writes now go into a buffer of its size."""
+    handle = win32print.OpenPrinter(builtin_printer)
+    try:
+        needed = win32print.DocumentProperties(None, handle, builtin_printer, None, None, 0)
+    finally:
+        win32print.ClosePrinter(handle)
+    old = pywintypes.DEVMODEType(0)     # only the public part
+    if needed <= old.Size:
+        pytest.skip("this driver keeps no settings of its own")
+    old.DeviceName = builtin_printer
+    monkeypatch.setattr(printing, "_user_settings", lambda handle: old)
+    devmode = printing.job_settings(builtin_printer, "A3")
+    assert devmode.PaperSize == 8 and devmode.Size + devmode.DriverExtra >= needed
+
+
 def boxed_pdf(make_pdf, name, size_mm):
     """A page with a black square near its top-left corner."""
     def draw(_, page, writer):
@@ -124,6 +141,13 @@ def test_direct_print_uses_the_requested_paper(make_pdf):
 
     a4 = boxed_pdf(make_pdf, "a4.pdf", (210, 297))
     assert print_and_inspect(backend, a4, paper="A4")[0] == (210, 297)
+
+
+@needs_file_printer
+def test_direct_print_includes_signatures_and_form_fields(make_pdf):
+    """A page whose only content is a visible signature must not come out blank."""
+    signed = make_pdf("signed.pdf", [(210, 297)], lambda index, page, writer: add_signature(page, writer))
+    print_and_inspect(printing.DirectBackend(), signed, paper="A4")
 
 
 @needs_file_printer

@@ -5,7 +5,7 @@ from pypdf.generic import (ArrayObject, DictionaryObject, NameObject, NumberObje
 
 from conftest import MM
 from sprint.paper import A3, A4, OTHER
-from sprint.pdfdocs import file_for_pages, read_document, write_subset
+from sprint.pdfdocs import file_for_pages, read_document, render_preview, write_subset
 
 
 def sizes(doc):
@@ -36,6 +36,21 @@ def test_rotate_and_user_unit(make_pdf):
         page[NameObject("/UserUnit")] = NumberObject(2)
     doc = read_document(make_pdf("big.pdf", [(594.5, 420.5)], tweak))
     assert sizes(doc) == [(841, 1189, OTHER)]
+
+
+def test_signatures_and_form_fields_are_drawn(make_pdf, tmp_path):
+    from conftest import add_signature
+    path = make_pdf("signed.pdf", [(210, 297), (210, 297)],
+                    lambda index, page, writer: index == 1 and add_signature(page, writer))
+
+    def ink(path, index):
+        width, height, rgba = render_preview(path, index, 300)
+        return sum(1 for i in range(0, len(rgba), 4) if rgba[i] < 100)
+    assert ink(path, 0) == 0
+    assert ink(path, 1) > 500                      # the 70×30 mm box
+    # also when the page is taken out of the file for printing
+    subset = file_for_pages(read_document(path), [1], str(tmp_path), "A4")
+    assert ink(subset, 0) > 500
 
 
 def test_unreadable_file(tmp_path):

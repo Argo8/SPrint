@@ -18,6 +18,8 @@ class FakeDevMode:
         self.Copies = 1
         self.Collate = 0
         self.Duplex = 1
+        self.Size = 220          # the public part of DEVMODEW
+        self.DriverExtra = 0     # the driver's own settings after it
         self.__dict__.update(values)
 
 
@@ -25,6 +27,8 @@ class FakeWin32Print:
     def __init__(self, reject_custom=False, max_copies=999):
         self.devmode = FakeDevMode(PaperSize=1, Fields=printing.DM_PAPERWIDTH)
         self.user_devmode = None   # this user's printing preferences, if changed
+        self.devmode_size = 220    # what the driver writes now
+        self.swaps = {}            # custom size (tenths of mm) -> paper ID the driver uses instead
         self.reject_custom = reject_custom
         self.max_copies = max_copies
         self.open_handles = 0
@@ -55,7 +59,14 @@ class FakeWin32Print:
         return self.default
 
     def DocumentProperties(self, hwnd, handle, name, out, inp, mode):
-        assert out is inp and mode == printing.DM_IN_BUFFER | printing.DM_OUT_BUFFER
+        if mode == 0:
+            return self.devmode_size
+        assert mode == printing.DM_IN_BUFFER | printing.DM_OUT_BUFFER
+        assert out.Size + out.DriverExtra >= self.devmode_size, "the driver would write past the buffer"
+        if out is not inp:
+            out.__dict__.update({k: v for k, v in inp.__dict__.items() if k != "DriverExtra"})
+        if out.PaperSize == printing.DMPAPER_USER and (out.PaperWidth, out.PaperLength) in self.swaps:
+            out.PaperSize = self.swaps[(out.PaperWidth, out.PaperLength)]
         if self.reject_custom and out.PaperSize == printing.DMPAPER_USER:
             out.PaperSize = 1
         out.Copies = min(out.Copies, self.max_copies)
@@ -87,7 +98,7 @@ def test_job_settings_custom_paper(fake):
     assert win32.devmode.PaperSize == 1          # the printer's own settings are untouched
 
 
-@pytest.mark.parametrize("paper, paper_id", [("A4", 9), ("A3", 8), ((297, 420), 8), ((420, 594), 66)])
+@pytest.mark.parametrize("paper, paper_id", [("A4", 9), ("A3", 8)])
 def test_job_settings_named_paper(fake, paper, paper_id):
     fake()
     dm = printing.job_settings("Office", paper)
@@ -156,6 +167,45 @@ def test_job_settings_rejected_size(fake):
         printing.job_settings("PDF", (610, 1234))
 
 
+def test_plot_asks_for_its_exact_size(fake):
+    """Even a plot of a standard size, so its paper can be made longer for the margins."""
+    fake()
+    dm = printing.job_settings("Plotter", (297, 420))
+    assert (dm.PaperSize, dm.PaperWidth, dm.PaperLength) == (printing.DMPAPER_USER, 2970, 4200)
+
+
+def test_plot_on_a_driver_without_custom_sizes_gets_the_standard_paper(fake):
+    fake(reject_custom=True)
+    assert printing.job_settings("PDF", (297, 420)).PaperSize == 8
+
+
+def test_driver_may_swap_a_custom_size_for_its_paper_of_that_size(fake):
+    win32 = fake()
+    win32.swaps = {(2970, 4200): 8}
+    win32.capabilities.update({printing.DC_PAPERS: [9, 8], printing.DC_PAPERSIZE: [
+        {"x": 2100, "y": 2970}, {"x": 2970, "y": 4200}]})
+    assert printing.job_settings("Plotter", (297, 420)).PaperSize == 8
+    win32.swaps = {(6100, 9140): 8}           # a different size is not accepted
+    with pytest.raises(printing.PrintError):
+        printing.job_settings("Plotter", (610, 914))
+
+
+def test_paper_longer_than_windows_allows(fake):
+    fake()
+    with pytest.raises(printing.PrintError, match="3276"):
+        printing.job_settings("Plotter", (914, 4000))
+    assert printing.job_settings("Plotter", (914, 3276)).PaperLength == 32760
+
+
+def test_settings_from_an_older_driver_get_a_buffer_of_the_size_it_writes(fake, monkeypatch):
+    win32 = fake()
+    win32.devmode_size = 220 + 512            # the driver keeps 512 bytes of its own now
+    monkeypatch.setattr(printing, "pywintypes", type("P", (), {"DEVMODEType": staticmethod(
+        lambda extra: FakeDevMode(DriverExtra=extra))}))
+    dm = printing.job_settings("Plotter", (610, 841))
+    assert dm.DriverExtra == 512 and dm.PaperLength == 8410
+
+
 def test_place_page_real_size_centred():
     # A4 page on A4 paper at 600 dpi with 4.2 mm margins: fits after shrinking a little
     x, y, w, h, rotate = place_page((210, 297), (4960, 7016), (100, 100), (4760, 6816), (600, 600))
@@ -181,10 +231,28 @@ def test_place_page_real_size_when_paper_has_room():
     assert (w, h) == (round(594 / 25.4 * 300), round(841 / 25.4 * 300))
 
 
+def test_place_page_with_different_resolution_across_and_down():
+    # A4 page on A4 paper at 1200×600 dpi: more pixels across than down, still portrait
+    sheet = (round(210 / 25.4 * 1200), round(297 / 25.4 * 600))
+    x, y, w, h, rotate = place_page((210, 297), sheet, (0, 0), sheet, (1200, 600))
+    assert rotate == 0 and (w, h) == sheet
+
+
 def test_place_page_small_page_not_enlarged():
     x, y, w, h, rotate = place_page((100, 150), (2480, 3508), (0, 0), (2480, 3508), (300, 300))
     assert (w, h) == (1181, 1772) and rotate == 0
     assert (x, y) == ((2480 - 1181) // 2, (3508 - 1772) // 2)
+
+
+def test_every_plot_gets_room_for_the_margins(fake, monkeypatch, make_pdf):
+    fake()
+    asked = []
+    monkeypatch.setattr(printing, "_room_for_margins", lambda printer, paper, copies, dm: asked.append(paper) or dm)
+    monkeypatch.setattr(printing.DirectBackend, "_print", lambda self, *args: True)
+    path = make_pdf("a3.pdf", [(280, 420)])
+    printing.DirectBackend().print_file("Plotter", path, paper=(297, 420))
+    printing.DirectBackend().print_file("Office", path, paper="A3")
+    assert asked == [(297, 420)]
 
 
 def test_driver_copies(fake):
