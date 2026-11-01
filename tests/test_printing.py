@@ -197,6 +197,26 @@ def test_paper_longer_than_windows_allows(fake):
     assert printing.job_settings("Plotter", (914, 3276)).PaperLength == 32760
 
 
+def test_settings_the_driver_no_longer_takes_are_replaced_by_its_own(fake, monkeypatch):
+    win32 = fake()
+    win32.devmode_size = 220 + 512
+    monkeypatch.setattr(printing, "pywintypes", type("P", (), {"DEVMODEType": staticmethod(
+        lambda extra: FakeDevMode(DriverExtra=extra))}))
+    real = win32.DocumentProperties
+
+    def refuse_old_settings(hwnd, handle, name, out, inp, mode):
+        if mode == 0:
+            return real(hwnd, handle, name, out, inp, mode)
+        if inp is not None and inp.DriverExtra < 512:
+            raise RuntimeError("DocumentProperties: invalid settings")
+        if inp is None:   # the driver's own settings
+            out.__dict__.update(FakeDevMode(DriverExtra=out.DriverExtra, PaperSize=9).__dict__)
+            return 1
+        return real(hwnd, handle, name, out, inp, mode)
+    win32.DocumentProperties = refuse_old_settings
+    assert printing._driver_sized("h", "Plotter", FakeDevMode()).DriverExtra == 512
+
+
 def test_settings_from_an_older_driver_get_a_buffer_of_the_size_it_writes(fake, monkeypatch):
     win32 = fake()
     win32.devmode_size = 220 + 512            # the driver keeps 512 bytes of its own now

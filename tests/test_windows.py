@@ -87,13 +87,25 @@ def test_job_settings_with_settings_saved_by_an_older_driver(builtin_printer, mo
         needed = win32print.DocumentProperties(None, handle, builtin_printer, None, None, 0)
     finally:
         win32print.ClosePrinter(handle)
-    old = pywintypes.DEVMODEType(0)     # only the public part
-    if needed <= old.Size:
+    if needed <= pywintypes.DEVMODEType(0).Size:
         pytest.skip("this driver keeps no settings of its own")
-    old.DeviceName = builtin_printer
-    monkeypatch.setattr(printing, "_user_settings", lambda handle: old)
+
+    def older_settings(handle):
+        """The printer's settings without the driver's own part, as an older driver saved them."""
+        current = win32print.GetPrinter(handle, 2)["pDevMode"]
+        old = pywintypes.DEVMODEType(0)
+        for name in ("DeviceName", "SpecVersion", "DriverVersion", "Fields", "Orientation", "PaperSize",
+                     "Scale", "Copies", "DefaultSource", "PrintQuality", "Color", "Duplex", "YResolution",
+                     "TTOption", "Collate", "FormName"):
+            try:
+                setattr(old, name, getattr(current, name))
+            except (AttributeError, TypeError):
+                pass
+        return old
+    monkeypatch.setattr(printing, "_user_settings", older_settings)
     devmode = printing.job_settings(builtin_printer, "A3")
-    assert devmode.PaperSize == 8 and devmode.Size + devmode.DriverExtra >= needed
+    assert devmode.PaperSize == 8
+    assert devmode.Size + devmode.DriverExtra >= needed, (devmode.Size, devmode.DriverExtra, needed)
 
 
 def boxed_pdf(make_pdf, name, size_mm):

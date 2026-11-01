@@ -151,17 +151,21 @@ def _user_settings(handle):
 def _driver_sized(handle, printer: str, devmode):
     """``devmode`` in a buffer as large as the driver writes now: settings saved by
     an older version of the driver can be smaller, and the driver would write past
-    their end."""
+    their end (pywin32 does not check)."""
     try:
         needed = win32print.DocumentProperties(None, handle, printer, None, None, 0)
-        if needed <= devmode.Size + devmode.DriverExtra:
-            return devmode
-        buffer = pywintypes.DEVMODEType(needed - devmode.Size)
-        win32print.DocumentProperties(None, handle, printer, buffer, devmode, DM_IN_BUFFER | DM_OUT_BUFFER)
-        return buffer
     except Exception:
-        log.debug("Cannot size the settings buffer of %s", printer, exc_info=True)
+        log.debug("Cannot ask %s for the size of its settings", printer, exc_info=True)
         return devmode
+    if needed <= devmode.Size + devmode.DriverExtra:
+        return devmode
+    buffer = pywintypes.DEVMODEType(needed - devmode.Size)
+    try:
+        win32print.DocumentProperties(None, handle, printer, buffer, devmode, DM_IN_BUFFER | DM_OUT_BUFFER)
+    except Exception:   # the driver does not take the old settings: start from its own
+        log.warning("%s: saved printing preferences no longer fit its driver; using its defaults", printer)
+        win32print.DocumentProperties(None, handle, printer, buffer, None, DM_OUT_BUFFER)
+    return buffer
 
 
 def default_duplex(printer: str) -> bool:
