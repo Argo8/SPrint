@@ -9,6 +9,7 @@ the job used and where the page landed on it.
 import os
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 from pypdf.generic import DecodedStreamObject, NameObject
@@ -80,8 +81,25 @@ def test_job_settings_use_this_users_printing_preferences(builtin_printer):
         win32print.ClosePrinter(handle)
 
 
+def older_settings(handle):
+    """The printer's settings without the driver's own part, as an older driver saved them."""
+    current = win32print.GetPrinter(handle, 2)["pDevMode"]
+    old = pywintypes.DEVMODEType(0)
+    for name in ("DeviceName", "SpecVersion", "DriverVersion", "Fields", "Orientation", "PaperSize",
+                 "Scale", "Copies", "DefaultSource", "PrintQuality", "Color", "Duplex", "YResolution",
+                 "TTOption", "Collate", "FormName"):
+        try:
+            setattr(old, name, getattr(current, name))
+        except (AttributeError, TypeError):
+            pass
+    return old
+
+
 def test_job_settings_with_settings_saved_by_an_older_driver(builtin_printer, monkeypatch):
-    """Settings smaller than what the driver writes now go into a buffer of its size."""
+    """Settings smaller than what the driver writes now go into a buffer of its size.
+
+    (pywin32 reports DriverExtra from its own copy of the settings, which the
+    driver may change, so the test checks which buffer was made and used.)"""
     handle = win32print.OpenPrinter(builtin_printer)
     try:
         needed = win32print.DocumentProperties(None, handle, builtin_printer, None, None, 0)
@@ -89,23 +107,25 @@ def test_job_settings_with_settings_saved_by_an_older_driver(builtin_printer, mo
         win32print.ClosePrinter(handle)
     if needed <= pywintypes.DEVMODEType(0).Size:
         pytest.skip("this driver keeps no settings of its own")
+    made, extras = [], []
 
-    def older_settings(handle):
-        """The printer's settings without the driver's own part, as an older driver saved them."""
-        current = win32print.GetPrinter(handle, 2)["pDevMode"]
-        old = pywintypes.DEVMODEType(0)
-        for name in ("DeviceName", "SpecVersion", "DriverVersion", "Fields", "Orientation", "PaperSize",
-                     "Scale", "Copies", "DefaultSource", "PrintQuality", "Color", "Duplex", "YResolution",
-                     "TTOption", "Collate", "FormName"):
-            try:
-                setattr(old, name, getattr(current, name))
-            except (AttributeError, TypeError):
-                pass
-        return old
+    def make(extra):
+        extras.append(extra)
+        made.append(pywintypes.DEVMODEType(extra))
+        return made[-1]
+    monkeypatch.setattr(printing, "pywintypes", SimpleNamespace(DEVMODEType=make))
     monkeypatch.setattr(printing, "_user_settings", older_settings)
     devmode = printing.job_settings(builtin_printer, "A3")
     assert devmode.PaperSize == 8
-    assert devmode.Size + devmode.DriverExtra >= needed, (devmode.Size, devmode.DriverExtra, needed)
+    assert len(made) == 1 and devmode is made[0]
+    assert extras == [needed - made[0].Size]      # the public part plus what the driver adds
+
+
+@needs_file_printer
+def test_printing_with_settings_saved_by_an_older_driver(make_pdf, monkeypatch):
+    monkeypatch.setattr(printing, "_user_settings", older_settings)
+    a4 = boxed_pdf(make_pdf, "a4.pdf", (210, 297))
+    assert print_and_inspect(printing.DirectBackend(), a4, paper="A4")[0] == (210, 297)
 
 
 def boxed_pdf(make_pdf, name, size_mm):
