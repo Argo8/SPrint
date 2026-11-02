@@ -18,7 +18,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .paper import A3, A4, DocInfo, PageInfo, exceeds_rolls, plot_paper
+from .paper import A3, A4, SMALL, DocInfo, PageInfo, exceeds_rolls, plot_paper
 
 A4_DEST, A3_DEST, PLOT_DEST = "a4", "a3", "plot"
 
@@ -49,6 +49,7 @@ class Entry:
 @dataclass
 class Options:
     a3_to_plotter: bool = False   # A3 pages on the plotter's 297 mm roll instead of the A3 printer
+    small_to_plotter: bool = False   # pages smaller than A4 on the 297 mm roll instead of the A4 printer
     roll: int = 610               # the roll in the plotter now
     duplex_a4: bool = False       # only changes the number of sheets shown
 
@@ -109,6 +110,7 @@ class Plan:
     a4: DestCount = field(default_factory=DestCount)
     a3: DestCount = field(default_factory=DestCount)      # pages for the A3 printer
     a3_pages: int = 0                                     # A3 pages wherever they go
+    small_pages: int = 0                                  # pages smaller than A4 wherever they go
     rolls: dict[int, RollCount] = field(default_factory=dict)
     oversize: int = 0
     a4_sheets: int = 0
@@ -146,7 +148,7 @@ class Plan:
 
 def route_of(page: PageInfo, opts: Options) -> PageRoute:
     kind = page.kind
-    if kind == A4:
+    if kind == A4 or (kind == SMALL and not opts.small_to_plotter):
         return PageRoute(A4_DEST)
     if kind == A3 and not opts.a3_to_plotter:
         return PageRoute(A3_DEST)
@@ -176,6 +178,8 @@ def build_plan(entries: list[Entry], opts: Options) -> Plan:
             info.done += state.done
             if page.kind == A3:
                 plan.a3_pages += 1
+            elif page.kind == SMALL:
+                plan.small_pages += 1
             if route.dest == A4_DEST:
                 plan.a4.total += 1
                 if not state.done:

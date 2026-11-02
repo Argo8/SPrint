@@ -232,6 +232,21 @@ def test_skip_a_page(qtbot, window, project):
     assert window.a4.print_button.text() == "Print 11 pages"
 
 
+def test_pages_smaller_than_a4_on_the_a4_printer_or_the_plotter(qtbot, window, make_pdf, services):
+    load(qtbot, window, [make_pdf("invite.pdf", [A4, (148, 210)])])
+    assert window.small_box.isVisible() and window.small_caption.text() == "Smaller than A4 (1 page)"
+    assert window.a4.print_button.text() == "Print 2 pages"
+    window.small_target._clicked(1)   # "Plotter (roll 297)"
+    assert window.c.opts.small_to_plotter and window.c.settings.small_to_plotter
+    assert window.a4.print_button.text() == "Print 1 page"
+    assert window.roll_chips[297].sub == "1 p."
+    qtbot.mouseClick(window.roll_chips[297], Qt.MouseButton.LeftButton)
+    print_card(qtbot, window, window.plot)
+    assert services.plot_backend.calls[-1][1:4] == ("invite [297x210].pdf", 1, (297, 210))
+    window.c.clear()
+    assert not window.small_box.isVisible()
+
+
 def test_a3_on_the_plotter(qtbot, window, project, services):
     load(qtbot, window, [project[2]])
     window.a3_target._clicked(1)   # "Plotter (roll 297)"

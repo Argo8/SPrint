@@ -100,7 +100,8 @@ class Controller(QObject):
         self.temp_dir = temp_dir
         self.entries: list[Entry] = []
         roll = settings.roll if settings.roll in ROLL_WIDTHS_MM else 610
-        self.opts = Options(a3_to_plotter=settings.a3_to_plotter, roll=roll)
+        self.opts = Options(a3_to_plotter=settings.a3_to_plotter,
+                            small_to_plotter=settings.small_to_plotter, roll=roll)
         self.printers = jobs.Printers(settings.printer_a4, settings.printer_a3, settings.printer_plotter)
         self.copies = 1
         self.duplex = {A4_DEST: False, A3_DEST: False}
@@ -332,6 +333,12 @@ class Controller(QObject):
     def set_a3_to_plotter(self, on: bool) -> None:
         self.opts.a3_to_plotter = on
         self.settings.a3_to_plotter = on
+        self._save()
+        self._changed()
+
+    def set_small_to_plotter(self, on: bool) -> None:
+        self.opts.small_to_plotter = on
+        self.settings.small_to_plotter = on
         self._save()
         self._changed()
 

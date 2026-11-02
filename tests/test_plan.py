@@ -71,6 +71,18 @@ def test_skipped_pages():
     assert plan.entries[1].kinds["A4"] == 12
 
 
+def test_pages_smaller_than_a4_go_to_the_a4_printer_or_the_297_roll():
+    entries = [entry("mixed.pdf", A4P, (148, 210), (105, 148), A3P)]
+    plan = build_plan(entries, Options(roll=297))
+    assert plan.small_pages == 2 and plan.a4.pending == 3
+    assert parts(plan.a4_parts) == [(0, [0, 1, 2])]
+    assert plan.plot_runs == []
+    plan = build_plan(entries, Options(small_to_plotter=True, roll=297))
+    assert plan.small_pages == 2 and plan.a4.pending == 1
+    assert [(r.width_mm, r.length_mm, parts(r.parts)) for r in plan.plot_runs] == [
+        (297, 210, [(0, [1])]), (297, 148, [(0, [2])])]
+
+
 def test_unread_and_broken_files_are_left_out():
     entries = [Entry("reading.pdf"), entry("broken.pdf", error="not a PDF"), entry("a.pdf", A4P)]
     plan = build_plan(entries, Options())
@@ -122,14 +134,15 @@ def test_every_page_is_printed_exactly_once():
     """Press every print button, plotting roll after roll: each page that is not
     skipped goes out once, to where its size says, on paper as wide as its roll."""
     rnd = random.Random(2026)
-    sizes = [A4P, A4L, A3P, A3L, A1, A2, A0, (148, 210), (297, 630), (610, 1000), (1000, 1500),
+    sizes = [A4P, A4L, A3P, A3L, A1, A2, A0, (148, 210), (105, 148), (297, 630), (610, 1000), (1000, 1500),
              (213.5, 297), (594, 841), (420, 1189)]
     for _ in range(200):
         entries = [entry(f"f{n}.pdf", *rnd.choices(sizes, k=rnd.randint(1, 6))) for n in range(rnd.randint(1, 5))]
         for e in entries:
             for state in e.states:
                 state.skip = rnd.random() < 0.15
-        opts = Options(a3_to_plotter=rnd.random() < 0.3, roll=rnd.choice(ROLL_WIDTHS_MM))
+        opts = Options(a3_to_plotter=rnd.random() < 0.3, small_to_plotter=rnd.random() < 0.5,
+                       roll=rnd.choice(ROLL_WIDTHS_MM))
         printed = Counter()
 
         def send(parts, dest, roll=None):

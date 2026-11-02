@@ -40,6 +40,7 @@ class Settings:
     printer_plotter: str = ""
     roll: int = 610               # the roll in the plotter, remembered between sessions
     a3_to_plotter: bool = False   # A3 pages on the plotter's 297 mm roll
+    small_to_plotter: bool = False   # pages smaller than A4 on the plotter's 297 mm roll
     language: str = ""            # "" until the user picks one
     print_program: str = ""       # "" = direct; "sumatra" or "adobe" for A4/A3 pages
     clear_when_done: bool = False  # empty the list once everything is printed
@@ -50,6 +51,7 @@ class Settings:
         "printer_plotter": ("printers", "plotter"),
         "roll": ("plotter", "roll"),
         "a3_to_plotter": ("plotter", "a3"),
+        "small_to_plotter": ("plotter", "small"),
         "language": ("ui", "language"),
         "print_program": ("printing", "program"),
         "clear_when_done": ("printing", "clear_when_done"),

@@ -29,6 +29,7 @@ Drop PDF files (or folders) into the window. SPrint reads the size of every page
 | Page size | Goes to |
 |---|---|
 | A4 (either orientation) | **A4 printer** |
+| smaller than A4 (A5, A6, …) | **A4 printer**, or the plotter's 297 mm roll (*Plotter (roll 297)* in the A4 card, shown when there are such pages) |
 | A3 (either orientation) | **A3 printer**, or the plotter's 297 mm roll (*Plotter (roll 297)* in the A3 card) |
 | anything else | **plotter**, on the narrowest roll the page fits on: 297, 420, 610 or 914 mm |
 
@@ -213,6 +214,7 @@ Povucite PDF datoteke (ili mape) u prozor. SPrint očita veličinu svake stranic
 | Veličina stranice | Ide na |
 |---|---|
 | A4 (bilo koja orijentacija) | **A4 pisač** |
+| manje od A4 (A5, A6, …) | **A4 pisač**, ili ploter na rolu 297 mm (*Ploter (rola 297)* u kartici A4, kad takvih stranica ima) |
 | A3 (bilo koja orijentacija) | **A3 pisač**, ili ploter na rolu 297 mm (*Ploter (rola 297)* u kartici A3) |
 | sve ostalo | **ploter**, na najužu rolu na koju stranica stane: 297, 420, 610 ili 914 mm |
 

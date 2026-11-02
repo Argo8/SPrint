@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QFrame, QGr
 
 from .. import APP_NAME, AUTHOR, __version__
 from ..i18n import count, get_language, join_and, meters, set_language, t
-from ..paper import A3, A4, MAX_PAPER_MM, ROLL_WIDTHS_MM
+from ..paper import A3, A4, MAX_PAPER_MM, ROLL_WIDTHS_MM, SMALL
 from ..plan import A3_DEST, A4_DEST, PLOT_DEST, Entry
 from ..settings import data_dir
 from . import icons
@@ -251,6 +251,8 @@ class FileRow(QFrame):
         kinds = info.kinds
         if kinds[A4]:
             chips.append((t("chip_a4", n=kinds[A4]), "a4"))
+        if kinds[SMALL]:
+            chips.append((t("chip_small", n=kinds[SMALL]), "plot" if c.opts.small_to_plotter else "a4"))
         if kinds[A3]:
             chips.append((t("chip_a3", n=kinds[A3]), "a3"))
         if kinds["OTHER"]:
@@ -693,6 +695,14 @@ class MainWindow(QMainWindow):
         box, self.a4_printer, self.a4_settings = self.a4.printer_row()
         self.a4_printer.activated.connect(lambda _i: self._pick_printer(A4_DEST, self.a4_printer))
         self.a4.body_layout.addWidget(box)
+        self.small_box = QWidget()   # only while the list has pages smaller than A4
+        small = vbox(self.small_box, spacing=6)
+        self.small_caption = label(muted=True, size=9, bold=True)
+        self.small_target = Segmented(["", ""])
+        self.small_target.picked.connect(lambda index: self.c.set_small_to_plotter(index == 1))
+        small.addWidget(self.small_caption)
+        small.addWidget(self.small_target, 0, Qt.AlignmentFlag.AlignLeft)
+        self.a4.body_layout.addWidget(self.small_box)
         self._wire_card(self.a4, A4_DEST, self.a4_settings)
         return self.a4
 
@@ -860,6 +870,8 @@ class MainWindow(QMainWindow):
         self.a3_duplex.setText(t("duplex"))
         self.a4.reprint.setText(t("reprint"))
         self.a3.reprint.setText(t("reprint"))
+        self.small_target.setToolTip(t("a3_target"))
+        self.small_target.set_labels([t("small_on_printer"), t("a3_on_plotter")])
         self.a3_target.setToolTip(t("a3_target"))
         self.a3_target.set_labels([t("a3_on_printer"), t("a3_on_plotter")])
         self.a3_note_text.setText(t("a3_plotter_note"))
@@ -941,6 +953,10 @@ class MainWindow(QMainWindow):
         self.a4_duplex.setEnabled(not busy)
         self.a4.reprint.setVisible(plan.a4.total > 0 and not plan.a4.pending)
         self.a4.reprint.setEnabled(not busy)
+        self.small_box.setVisible(plan.small_pages > 0)
+        self.small_caption.setText(t("small_label", pages=count(plan.small_pages, "page")))
+        self.small_target.set_index(1 if opts.small_to_plotter else 0)
+        self.small_target.setEnabled(not busy)
         self._update_action(self.a4, A4_DEST, plan)
 
         # A3

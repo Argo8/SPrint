@@ -4,6 +4,7 @@ Pure Python with no I/O, so every routing rule can be unit-tested.
 
 Routing rules:
   * A4 pages (either orientation)  -> A4 printer
+  * smaller pages (A5, A6, ...)    -> A4 printer, or the plotter's 297 mm roll
   * A3 pages (either orientation)  -> A3 printer, or the plotter's 297 mm roll
   * every other size               -> plotter, on the narrowest roll the page fits on
 
@@ -20,6 +21,7 @@ PT_TO_MM = 25.4 / 72
 
 A4 = "A4"
 A3 = "A3"
+SMALL = "SMALL"   # not A4 but fits on an A4 sheet (A5, A6, ...)
 OTHER = "OTHER"
 
 STANDARD_SIZES_MM = {A4: (210.0, 297.0), A3: (297.0, 420.0)}
@@ -42,11 +44,14 @@ _ROLL_SLACK_MM = 0.5
 
 def classify(width_mm: float, height_mm: float,
              tolerance: float = SIZE_TOLERANCE_MM) -> str:
-    """Return A4, A3 or OTHER, ignoring orientation."""
+    """Return A4, A3, SMALL or OTHER, ignoring orientation."""
     short, long = sorted((width_mm, height_mm))
     for name, (std_short, std_long) in STANDARD_SIZES_MM.items():
         if abs(short - std_short) <= tolerance and abs(long - std_long) <= tolerance:
             return name
+    a4_short, a4_long = STANDARD_SIZES_MM[A4]
+    if short <= a4_short + tolerance and long <= a4_long + tolerance:
+        return SMALL
     return OTHER
 
 

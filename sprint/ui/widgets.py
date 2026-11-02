@@ -575,7 +575,7 @@ class RollChip(HoverButton):
 
 # ── Page pictures ────────────────────────────────────────────────────────────
 
-KIND_ROLES = {"A4": "a4", "A3": "a3", "OTHER": "plot"}
+KIND_ROLES = {"A4": "a4", "SMALL": "a4", "A3": "a3", "OTHER": "plot"}
 
 
 def page_box(width_mm: float, height_mm: float, box: float) -> QSize:
