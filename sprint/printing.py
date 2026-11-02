@@ -60,7 +60,12 @@ LOGPIXELSX, LOGPIXELSY = 88, 90
 PHYSICALWIDTH, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY = 110, 111, 112, 113
 
 # FPDF_RenderPage flags: annotations, print quality, text as outlines (no GDI font lookups)
-RENDER_FLAGS = 0x01 | 0x800 | 0x04
+FPDF_PRINTING = 0x800
+RENDER_FLAGS = 0x01 | FPDF_PRINTING | 0x04
+
+#: Finding a page's empty margins: a grey darker than this is ink.
+INK_BELOW = 250
+_INK = bytes(1 if value < INK_BELOW else 0 for value in range(256))
 
 #: Paper sizes drivers know by name (portrait, mm) -> Windows paper ID. A4/A3
 #: printers get these; a plot asks for its exact size first and falls back to
@@ -341,29 +346,74 @@ def _ask_driver(handle, printer: str, devmode, paper: Optional[tuple], copies: i
                                                                             (width, length))
 
 
-def place_page(size_mm, sheet_px, offset_px, printable_px, dpi) -> tuple[int, int, int, int, int]:
+def place_page(size_mm, sheet_px, offset_px, printable_px, dpi,
+               blank_mm=(0.0, 0.0, 0.0, 0.0)) -> tuple[int, int, int, int, int]:
     """Where to draw a page on the sheet: (x, y, width, height, rotate) in device pixels,
     relative to the printable area as GDI expects.
 
-    The page is turned a quarter if its orientation differs from the sheet's,
-    printed at its real size unless that exceeds the printable area (then it is
-    shrunk to fit), and centred on the sheet.
+    The page is turned a quarter if its orientation differs from the sheet's and
+    centred on the sheet. It prints at its real size when the edge the printer
+    cannot reach holds only empty margin (``blank_mm``: left, top, right, bottom of
+    the page as shown), so drawings keep their scale; otherwise it is shrunk just
+    enough for its ink to fit. It is never enlarged.
     """
     w_mm, h_mm = size_mm
+    left, top, right, bottom = blank_mm
     sheet_w, sheet_h = sheet_px
     across, down = sheet_w / dpi[0], sheet_h / dpi[1]   # inches: a printer's dpi may differ by axis
     rotate = 0
     if (w_mm > h_mm and across < down) or (w_mm < h_mm and across > down):
         w_mm, h_mm, rotate = h_mm, w_mm, 1          # 1 = 90° clockwise
-    width, height = w_mm / 25.4 * dpi[0], h_mm / 25.4 * dpi[1]
-    scale = min(1.0, printable_px[0] / width, printable_px[1] / height)
-    width = min(round(width * scale), printable_px[0])
-    height = min(round(height * scale), printable_px[1])
-    x = (sheet_w - width) // 2 - offset_px[0]
-    y = (sheet_h - height) // 2 - offset_px[1]
-    x = max(0, min(x, printable_px[0] - width))
-    y = max(0, min(y, printable_px[1] - height))
+        left, top, right, bottom = bottom, left, top, right   # the left edge goes to the top
+    per_mm_x, per_mm_y = dpi[0] / 25.4, dpi[1] / 25.4
+    width, height = w_mm * per_mm_x, h_mm * per_mm_y
+    ink_w = max(1.0, width - (left + right) * per_mm_x)
+    ink_h = max(1.0, height - (top + bottom) * per_mm_y)
+    scale = min(1.0, printable_px[0] / ink_w, printable_px[1] / ink_h)
+    x, width = _along(sheet_w, width * scale, offset_px[0], printable_px[0],
+                      left * per_mm_x * scale, right * per_mm_x * scale)
+    y, height = _along(sheet_h, height * scale, offset_px[1], printable_px[1],
+                       top * per_mm_y * scale, bottom * per_mm_y * scale)
     return x, y, width, height, rotate
+
+
+def _along(sheet: int, size: float, offset: int, printable: int, blank_before: float,
+           blank_after: float) -> tuple[int, int]:
+    """Start (relative to the printable area) and length of the page along one axis:
+    centred on the sheet, moved as little as needed to keep its ink printable."""
+    before, after = math.floor(blank_before), math.floor(blank_after)
+    size = min(round(size), printable + before + after)   # rounding must not push ink out
+    start = (sheet - size) // 2 - offset
+    return max(-before, min(start, printable - size + after)), size
+
+
+def blank_margins_mm(page) -> tuple[float, float, float, float]:
+    """Empty margin (mm) between each edge of a pypdfium2 page and its nearest ink, as
+    it prints: (left, top, right, bottom) of the page as shown. Zeros when the page
+    has no ink or cannot be drawn, which means ink up to the edges."""
+    import pypdfium2.raw as pdfium_c
+
+    try:
+        scale = min(2 * PT_TO_MM, 2400 / max(page.get_size()))   # 2 pixels a mm, at most 2400 a side
+        bitmap = page.render(scale=scale, grayscale=True, may_draw_forms=False, extra_flags=FPDF_PRINTING,
+                             force_bitmap_format=pdfium_c.FPDFBitmap_Gray)
+        try:
+            width, height, stride = bitmap.width, bitmap.height, bitmap.stride
+            data = bytes(bitmap.buffer)
+        finally:
+            bitmap.close()
+    except Exception:
+        log.debug("Cannot find the margins of a page", exc_info=True)
+        return 0.0, 0.0, 0.0, 0.0
+    rows = [data[row * stride:row * stride + width].translate(_INK) for row in range(height)]
+    inked = [row for row, ink in enumerate(rows) if 1 in ink]
+    if not inked:
+        return 0.0, 0.0, 0.0, 0.0
+    first = min(rows[row].find(1) for row in inked)
+    last = max(rows[row].rfind(1) for row in inked)
+    mm = PT_TO_MM / scale   # one pixel; a pixel less on each side, ink may start anywhere in it
+    return (max(0, first - 1) * mm, max(0, inked[0] - 1) * mm,
+            max(0, width - 2 - last) * mm, max(0, height - 2 - inked[-1]) * mm)
 
 
 # ── PDF print programs ───────────────────────────────────────────────────────
@@ -402,6 +452,7 @@ class DirectBackend(Backend):
 
         name = os.path.basename(path)
         pdf = pdfium.PdfDocument(path)
+        blanks = {}   # page -> empty margins, worked out once for all copies
         jobs = 1
         if copies > 1 and not _driver_copies(printer, copies, collate=len(pdf) > 1):
             jobs, devmode.Copies = copies, 1    # print the job again for every copy
@@ -415,8 +466,10 @@ class DirectBackend(Backend):
                             page = load_flat_page(pdf, index, for_print=True)
                             try:
                                 size = sizes.get(index) or tuple(v * PT_TO_MM for v in page.get_size())
+                                if index not in blanks:
+                                    blanks[index] = blank_margins_mm(page)
                                 win32print.StartPage(hdc)
-                                x, y, w, h, rotate = place_page(size, *_sheet_metrics(hdc))
+                                x, y, w, h, rotate = place_page(size, *_sheet_metrics(hdc), blanks[index])
                                 pdfium_c.FPDF_RenderPage(ctypes.c_void_p(hdc), page.raw,
                                                          x, y, w, h, rotate, RENDER_FLAGS)
                                 win32print.EndPage(hdc)

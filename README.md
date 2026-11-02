@@ -62,7 +62,9 @@ own settings are never changed. SPrint remembers which roll is in the plotter.
 - Number of copies (collated)
 - Prints by itself with the built-in PDF renderer (PDFium, the engine of Google Chrome), always as the PDF is —
   no Adobe Reader needed
-- Landscape pages are turned to fit the paper; pages larger than the printable area are shrunk, smaller ones are not enlarged
+- Pages print at their real size, so drawings keep their scale, as long as the edge the printer cannot reach holds only
+  empty margin (a drawing frame 5 mm in is enough); a page with ink up to the edge is shrunk just enough to fit,
+  and nothing is ever enlarged. Landscape pages are turned to fit the paper
 - Only the needed pages of a file are printed; CAD layer visibility is kept
 - Printing runs in the background; the window shows progress per printer
 - English / Croatian interface
@@ -243,7 +245,9 @@ putuje sa svakim poslom ispisa, pa se postavke samog plotera nikad ne mijenjaju.
 - Broj kopija (složene)
 - Ispisuje sam, ugrađenim PDF prikazom (PDFium, pogon Google Chromea), uvijek onako kako je u PDF-u —
   Adobe Reader nije potreban
-- Položene stranice okreću se prema papiru; stranice veće od područja ispisa se smanjuju, manje se ne povećavaju
+- Stranice se ispisuju u stvarnoj veličini, pa crteži zadržavaju mjerilo, kad god je na rubu koji pisač ne može
+  ispisati samo prazna margina (dovoljan je okvir crteža 5 mm od ruba); stranica s crtežom do samog ruba smanji se
+  točno toliko da stane, a ništa se ne povećava. Položene stranice okreću se prema papiru
 - Ispisuju se samo potrebne stranice datoteke; vidljivost CAD slojeva ostaje očuvana
 - Ispis radi u pozadini; prozor pokazuje napredak za svaki pisač
 - Sučelje na hrvatskom / engleskom

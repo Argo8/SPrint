@@ -258,6 +258,43 @@ def test_place_page_with_different_resolution_across_and_down():
     assert rotate == 0 and (w, h) == sheet
 
 
+def mm_px(mm, dpi):
+    return round(mm / 25.4 * dpi)
+
+
+def test_place_page_drawing_keeps_its_scale_when_only_margin_is_cut():
+    # A2 drawing (frame 10 mm in) on the 420 roll, 5 mm unprintable edge: real size, centred
+    sheet = (mm_px(420, 300), mm_px(604, 300))               # paper made longer for the margins
+    x, y, w, h, rotate = place_page((420, 594), sheet, (59, 59), (sheet[0] - 118, sheet[1] - 118),
+                                    (300, 300), blank_mm=(10, 10, 10, 10))
+    assert (w, h) == (mm_px(420, 300), mm_px(594, 300)) and rotate == 0
+    assert (x, y) == (-59, 0)                                # 5 mm of empty margin outside on each side
+    # with ink up to the edge it is shrunk as before
+    x, y, w, h, rotate = place_page((420, 594), sheet, (59, 59), (sheet[0] - 118, sheet[1] - 118), (300, 300))
+    assert w == sheet[0] - 118 and h < mm_px(594, 300)
+
+
+def test_place_page_empty_margin_turns_with_the_page():
+    # 841×594 drawing turned onto 610×841 roll paper (no extra length): only its left
+    # 30 mm are empty, and they go to the top when the page is turned clockwise
+    sheet, offset, area = (7205, 9933), (59, 59), (7087, 9815)
+    x, y, w, h, rotate = place_page((841, 594), sheet, offset, area, (300, 300), blank_mm=(30, 0, 0, 0))
+    assert rotate == 1 and (w, h) == (mm_px(594, 300), mm_px(841, 300))   # real size
+    assert y == area[1] - h                       # moved up: the top 10 mm cut are empty margin
+    assert x == (sheet[0] - w) // 2 - offset[0]
+
+
+def test_place_page_shrinks_only_as_much_as_the_ink_needs():
+    # A3 drawing whose frame is 2 mm from the edge, on A3 paper with 4.2 mm edges at 600 dpi
+    sheet = (mm_px(297, 600), mm_px(420, 600))
+    edge = mm_px(4.2, 600)
+    area = (sheet[0] - 2 * edge, sheet[1] - 2 * edge)
+    x, y, w, h, rotate = place_page((297, 420), sheet, (edge, edge), area, (600, 600), blank_mm=(2, 2, 2, 2))
+    ink = 293 / 25.4 * 600
+    assert abs(w / mm_px(297, 600) - area[0] / ink) < 0.001   # 98.5 %, not 97.2 %
+    assert abs(x + 2 / 25.4 * 600 * w / mm_px(297, 600)) <= 1  # the frame starts at the printable edge
+
+
 def test_place_page_small_page_not_enlarged():
     x, y, w, h, rotate = place_page((100, 150), (2480, 3508), (0, 0), (2480, 3508), (300, 300))
     assert (w, h) == (1181, 1772) and rotate == 0

@@ -53,6 +53,40 @@ def test_signatures_and_form_fields_are_drawn(make_pdf, tmp_path):
     assert ink(subset, 0) > 500
 
 
+def test_blank_margins_of_a_drawing(make_pdf):
+    import pypdfium2 as pdfium
+    from pypdf.generic import DecodedStreamObject
+
+    from sprint.printing import blank_margins_mm
+
+    def frame(inset_left, inset_top, inset_right, inset_bottom, rotate=0):
+        def draw(_, page, writer):
+            w, h = 297, 420
+            box = DecodedStreamObject()
+            x0, y0 = inset_left * MM, inset_bottom * MM
+            x1, y1 = (w - inset_right) * MM, (h - inset_top) * MM
+            box.set_data(f"0.7 w 0 G {x0:.2f} {y0:.2f} {x1 - x0:.2f} {y1 - y0:.2f} re S".encode())
+            page[NameObject("/Contents")] = writer._add_object(box)
+            if rotate:
+                page[NameObject("/Rotate")] = NumberObject(rotate)
+        return draw
+
+    def margins(name, tweak):
+        pdf = pdfium.PdfDocument(make_pdf(name, [(297, 420)], tweak))
+        try:
+            return blank_margins_mm(pdf[0])
+        finally:
+            pdf.close()
+
+    left, top, right, bottom = margins("iso.pdf", frame(20, 10, 10, 10))
+    assert 18.9 <= left <= 20 and all(8.9 <= m <= 10 for m in (top, right, bottom))
+    assert margins("edge.pdf", frame(0, 10, 10, 10))[0] < 1
+    # shown turned a quarter clockwise: the wide left margin is now at the top
+    left, top, right, bottom = margins("turned.pdf", frame(20, 10, 10, 10, rotate=90))
+    assert 18.9 <= top <= 20 and all(8.9 <= m <= 10 for m in (left, right, bottom))
+    assert margins("blank.pdf", None) == (0.0, 0.0, 0.0, 0.0)
+
+
 def test_unreadable_file(tmp_path):
     path = tmp_path / "broken.pdf"
     path.write_bytes(b"%PDF-1.4 garbage")
