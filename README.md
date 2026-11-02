@@ -118,17 +118,17 @@ pyinstaller SPrint.spec
 That gives the program folder `dist\SPrint\`. Then, with [Inno Setup 6.5+](https://jrsoftware.org/isinfo.php):
 
 ```bash
-iscc /DAppVersion=2.1.0 installer\SPrint.iss
+iscc /DAppVersion=2.1.1 installer\SPrint.iss
 ```
 
-which writes `dist\SPrint-Setup-2.1.0.exe`. For Croatian installer texts put Inno Setup's unofficial
+which writes `dist\SPrint-Setup-2.1.1.exe`. For Croatian installer texts put Inno Setup's unofficial
 [`Croatian.isl`](https://jrsoftware.org/files/istrans/) into `installer\` first.
 
 GitHub Actions does all of this on every push: it runs the tests on Windows, builds the installer, installs it,
 starts SPrint, uninstalls it and keeps the installer and the portable zip as artifacts.
 
 To publish a release, raise `__version__` in `sprint/__init__.py`. Then either open *Actions → Build → Run
-workflow* on GitHub, tick *Publish a release* and run it, or push a matching tag such as `v2.1.0` (the build
+workflow* on GitHub, tick *Publish a release* and run it, or push a matching tag such as `v2.1.1` (the build
 stops if the tag differs). The release gets the installer and the portable zip once the build passes; the text
 on the release page comes from `.github/release-notes.md`.
 
@@ -302,17 +302,17 @@ pyinstaller SPrint.spec
 To daje mapu programa `dist\SPrint\`. Zatim, uz [Inno Setup 6.5+](https://jrsoftware.org/isinfo.php):
 
 ```bash
-iscc /DAppVersion=2.1.0 installer\SPrint.iss
+iscc /DAppVersion=2.1.1 installer\SPrint.iss
 ```
 
-što stvara `dist\SPrint-Setup-2.1.0.exe`. Za hrvatske tekstove instalacije prvo stavite neslužbeni
+što stvara `dist\SPrint-Setup-2.1.1.exe`. Za hrvatske tekstove instalacije prvo stavite neslužbeni
 [`Croatian.isl`](https://jrsoftware.org/files/istrans/) iz Inno Setupa u `installer\`.
 
 GitHub Actions sve to radi pri svakom pushu: pokreće testove na Windowsima, izrađuje instalaciju, instalira je,
 pokreće SPrint, deinstalira ga i čuva instalaciju i prijenosni zip kao artefakte.
 
 Za objavu nove verzije povećajte `__version__` u `sprint/__init__.py`. Zatim na GitHubu otvorite *Actions →
-Build → Run workflow*, označite *Publish a release* i pokrenite, ili pushajte isti tag, npr. `v2.1.0` (build
+Build → Run workflow*, označite *Publish a release* i pokrenite, ili pushajte isti tag, npr. `v2.1.1` (build
 staje ako se tag razlikuje). Release dobiva instalaciju i prijenosni zip kad build prođe; tekst stranice
 releasea nalazi se u `.github/release-notes.md`.
 

@@ -24,7 +24,7 @@ from ..paper import A3, A4, MAX_PAPER_MM, ROLL_WIDTHS_MM, SMALL
 from ..plan import A3_DEST, A4_DEST, PLOT_DEST, Entry
 from ..settings import data_dir
 from . import icons
-from .controller import Controller
+from .controller import BACKGROUND, URGENT, Controller
 from .theme import colors, font
 from .widgets import (EASE, ActionButton, Collapsible, DropOverlay, Drawer, ElidedLabel, FlowLayout,
                       HoverButton, PageShape, PageTile, PreviewPopup, ProgressBar, RollChip, Segmented,
@@ -32,6 +32,7 @@ from .widgets import (EASE, ActionButton, Collapsible, DropOverlay, Drawer, Elid
                       set_icon, set_prop, vbox)
 
 RIGHT_WIDTH = 410
+AHEAD_PAGES = 40   # page pictures made before a file is opened (the rest when it is)
 
 
 def page_label(page) -> str:
@@ -102,7 +103,7 @@ class RowHeader(HoverButton):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = hbox(self, (6, 4, 6, 4), 12)
-        self.shape = PageShape(46)
+        self.shape = PageShape(56)
         self.name = ElidedLabel()
         self.name.setFont(font(10.5, True))
         self.chips = QWidget()
@@ -114,8 +115,7 @@ class RowHeader(HoverButton):
         layout.addWidget(self.shape)
         layout.addLayout(texts, 1)
         layout.addWidget(self.chevron)
-        # the picture takes the mouse for the large preview; clicks on it still reach the row
-        for child in (self.name, self.chips, self.chevron):
+        for child in (self.shape, self.name, self.chips, self.chevron):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
     def set_chips(self, chips: list[tuple[str, str]]) -> None:
@@ -143,7 +143,7 @@ class RowHeader(HoverButton):
                 if self.chips_layout.itemAt(i).widget() is not None]
 
     def sizeHint(self):
-        return QSize(200, 64)
+        return QSize(200, 74)
 
     def paintEvent(self, _event):
         c = colors()
@@ -171,7 +171,7 @@ class FileRow(QFrame):
         top = hbox(margins=(6, 6, 8, 6), spacing=8)
         self.header = RowHeader()
         self.header.clicked.connect(self.toggle)
-        window.peek.watch(self.header.shape, self, 0)
+        self._pictures_asked = False   # the page pictures are made ahead, once
         self.spinner = Spinner()
         self.status = QLabel()
         self.status.setFont(font(8.5, True))
@@ -184,7 +184,7 @@ class FileRow(QFrame):
         top.addWidget(self.remove_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(top)
         self.pages = Collapsible()
-        pages_layout = vbox(self.pages, (74, 0, 14, 14), 10)
+        pages_layout = vbox(self.pages, (86, 0, 14, 14), 10)
         self.hint = label(t("pages_hint"), muted=True, size=9)
         self.tiles_box = QWidget()
         self.tiles_layout = FlowLayout(self.tiles_box, spacing=8)
@@ -201,9 +201,10 @@ class FileRow(QFrame):
         opening = not self.pages.is_open
         if opening:
             self._build_tiles()
-            self.window.refresh()
         self.pages.set_open(opening)
         self.header.chevron.set_open(opening)
+        if opening:
+            self.window.refresh()   # open now, so the tiles get their pictures
 
     def _build_tiles(self) -> None:
         if self.tiles or not self.entry.ready:
@@ -247,6 +248,12 @@ class FileRow(QFrame):
             picture = c.preview(entry.path, first.index, self.header.shape.picture_px())
             if picture is not None:
                 self.header.shape.set_picture(picture)
+        if not self._pictures_asked:   # so they are there when the file is opened
+            self._pictures_asked = True
+            ratio = self.devicePixelRatioF()
+            for page in doc.pages[:AHEAD_PAGES]:
+                c.preview(entry.path, page.index, PageTile.picture_px_for((page.width_mm, page.height_mm), ratio),
+                          BACKGROUND)
         chips = [(t("file_pages", n=doc.page_count), "")]
         kinds = info.kinds
         if kinds[A4]:
@@ -379,7 +386,7 @@ class PagePeek(QObject):
         size = QSize(max(60, round(page.width_mm * scale)), max(60, round(page.height_mm * scale)))
         px = math.ceil(max(size.width(), size.height()) * root.devicePixelRatioF())
         c = self.window.c
-        picture = c.preview(entry.path, page.index, px, urgent=True)
+        picture = c.preview(entry.path, page.index, px, URGENT)
         self.shown = (entry.path, page.index, px)
         self.popup.show_page(picture or c.any_preview(entry.path, page.index), size,
                              os.path.basename(entry.path), row.page_detail(pos), loading=picture is None)
@@ -1002,7 +1009,7 @@ class MainWindow(QMainWindow):
                    t("roll_chip_pages", n=pending) if pending else t("roll_chip_done"))
             chip.set_info(sub, not total, bool(total) and not pending, f"{t('roll_title', w=width)}, {sub}")
             chip.setChecked(width == opts.roll)
-            chip.setEnabled(not busy)
+            chip.setEnabled(not busy and bool(total))
         current = plan.rolls.get(opts.roll)
         self.replot.setVisible(False)
         if not current or not current.total:

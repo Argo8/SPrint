@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 DESTS = (A4_DEST, A3_DEST, PLOT_DEST)
 MAX_COPIES = 99
 BIG_PREVIEW_PX = 400     # pictures this large take memory: only the latest few are kept
+URGENT, NORMAL, BACKGROUND = 0, 1, 2   # which page pictures are made first
 BIG_PREVIEWS_KEPT = 8
 DONE_SHOW_MS = 2200
 
@@ -130,7 +131,7 @@ class Controller(QObject):
         self._pending_reads = 0
         threading.Thread(target=self._read_worker, name="read", daemon=True).start()
         self._preview_requests: queue.PriorityQueue = queue.PriorityQueue()
-        self._preview_wanted: set[tuple[str, int, int]] = set()
+        self._preview_wanted: dict[tuple[str, int, int], int] = {}   # waiting -> priority
         self._preview_failed: set[tuple[str, int]] = set()   # pages pdfium cannot draw
         self._preview_count = 0
         threading.Thread(target=self._preview_worker, name="preview", daemon=True).start()
@@ -280,16 +281,20 @@ class Controller(QObject):
 
     # ── Page pictures ────────────────────────────────────────────────────────
 
-    def preview(self, path: str, page_index: int, px: int, urgent: bool = False) -> Optional[QPixmap]:
+    def preview(self, path: str, page_index: int, px: int, priority: int = NORMAL) -> Optional[QPixmap]:
         """The page's picture, ``px`` pixels on its long side, if it is ready; otherwise
-        it is made in the background (``urgent``: before the others waiting)."""
+        it is made in the background, the lower ``priority`` the sooner (a picture
+        that is waiting moves up when it is asked for more urgently)."""
         key = (path, page_index, px)
         if key in self.previews:
             return self.previews[key]
-        if key not in self._preview_wanted and (path, page_index) not in self._preview_failed:
-            self._preview_wanted.add(key)
+        if (path, page_index) in self._preview_failed:
+            return None
+        waiting = self._preview_wanted.get(key)
+        if waiting is None or priority < waiting:
+            self._preview_wanted[key] = priority
             self._preview_count += 1
-            self._preview_requests.put((0 if urgent else 1, self._preview_count, key))
+            self._preview_requests.put((priority, self._preview_count, key))
         return None
 
     def any_preview(self, path: str, page_index: int) -> Optional[QPixmap]:
@@ -299,7 +304,10 @@ class Controller(QObject):
 
     def _preview_worker(self) -> None:
         while True:
-            _urgency, _order, (path, index, px) = self._preview_requests.get()
+            _priority, _order, key = self._preview_requests.get()
+            if key not in self._preview_wanted:   # made already (it was asked for twice)
+                continue
+            path, index, px = key
             try:
                 width, height, data = render_preview(path, index, px)
                 image = QImage(data, width, height, width * 4, QImage.Format.Format_RGBA8888).copy()
@@ -310,7 +318,7 @@ class Controller(QObject):
 
     def _on_preview(self, path: str, index: int, px: int, image: QImage) -> None:
         key = (path, index, px)
-        self._preview_wanted.discard(key)
+        self._preview_wanted.pop(key, None)
         if image.isNull():
             self._preview_failed.add((path, index))
             return

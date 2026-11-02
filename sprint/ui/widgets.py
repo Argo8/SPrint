@@ -529,7 +529,8 @@ class _SegmentHighlight(QWidget):
 
 
 class RollChip(HoverButton):
-    """One roll width: how many pages need it, or ✓ when they are printed."""
+    """One roll width: how many pages need it, or ✓ when they are printed. A roll no
+    page needs is grey and cannot be picked."""
 
     def __init__(self, width_mm: int, parent=None):
         super().__init__(parent)
@@ -552,9 +553,20 @@ class RollChip(HoverButton):
         c = colors()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setOpacity(1.0 if self.isEnabled() else 0.5)
         rect = QRectF(self.rect()).adjusted(3, 3, -3, -3)
         sel = self.isChecked()
+        if self.empty:   # greyed out; still outlined when it is the roll in the plotter
+            p.setPen(QPen(QColor(c.border_strong if sel else c.border), 1.5 if sel else 1))
+            p.setBrush(QColor(c.surface2))
+            p.drawRoundedRect(rect, 12, 12)
+            p.setPen(QColor(c.border_strong))
+            p.setFont(font(12.5, True))
+            top = QRectF(rect.left(), rect.top() + 7, rect.width(), 24)
+            p.drawText(top, Qt.AlignmentFlag.AlignCenter, str(self.width_mm))
+            p.setFont(font(8.5, True))
+            p.drawText(QRectF(rect.left(), top.bottom(), rect.width(), 18), Qt.AlignmentFlag.AlignCenter, self.sub)
+            return
+        p.setOpacity(1.0 if self.isEnabled() else 0.6)
         h = self.hover.value
         if sel:
             p.setPen(QPen(color(c.plot, .28), 3))
@@ -565,10 +577,10 @@ class RollChip(HoverButton):
         p.drawRoundedRect(rect, 12, 12)
         top = QRectF(rect.left(), rect.top() + 7, rect.width(), 24)
         p.setFont(font(12.5, True))
-        p.setPen(QColor(c.muted if self.empty and not sel else c.text))
+        p.setPen(QColor(c.text))
         p.drawText(top, Qt.AlignmentFlag.AlignCenter, str(self.width_mm))
         p.setFont(font(8.5, True))
-        p.setPen(QColor(c.ok if self.done else c.plot_text if sel else c.muted))
+        p.setPen(QColor(c.ok if self.done else c.plot_text))
         p.drawText(QRectF(rect.left(), top.bottom(), rect.width(), 18), Qt.AlignmentFlag.AlignCenter, self.sub)
         self.focus_ring(p, rect, 12)
 
@@ -645,7 +657,8 @@ class PageShape(QWidget):
 
 class PageTile(HoverButton):
     """One page: its picture, size and where it goes. Clicking skips it or brings it back."""
-    WIDTH, HEIGHT = 100, 128
+    WIDTH, HEIGHT = 176, 214
+    PICTURE_W, PICTURE_H = 154, 136   # the most room the page's picture gets
 
     def __init__(self, size_mm, kind: str, label_text: str, parent=None):
         super().__init__(parent)
@@ -666,12 +679,19 @@ class PageTile(HoverButton):
         self.picture = picture
         self.update()
 
-    def box(self) -> float:
-        """Larger formats get a larger picture (40 px for A3 and smaller, 62 px for A0)."""
-        return 40 + 22 * max(0.0, min(1.0, (max(self.size_mm) - 297) / (1189 - 297)))
+    @classmethod
+    def picture_size(cls, size_mm) -> tuple[float, float]:
+        """The page's picture in the tile (logical pixels), as large as it fits."""
+        scale = min(cls.PICTURE_W / size_mm[0], cls.PICTURE_H / size_mm[1])
+        return size_mm[0] * scale, size_mm[1] * scale
+
+    @classmethod
+    def picture_px_for(cls, size_mm, ratio: float) -> int:
+        """Pixels on the long side for a sharp picture on a screen of this pixel ratio."""
+        return math.ceil(max(cls.picture_size(size_mm)) * ratio)
 
     def picture_px(self) -> int:
-        return math.ceil(self.box() * self.devicePixelRatioF())
+        return self.picture_px_for(self.size_mm, self.devicePixelRatioF())
 
     def paintEvent(self, _event):
         c = colors()
@@ -684,10 +704,9 @@ class PageTile(HoverButton):
         p.setBrush(blend(c.surface2, c.surface, h))
         p.drawRoundedRect(rect, 12, 12)
         p.setOpacity(0.55 if self.skipped else (1.0 if self.isEnabled() else 0.6))
-        size = page_box(*self.size_mm, self.box())
-        area = QRectF(rect.left(), rect.top() + 6, rect.width(), 66)
-        page = QRectF(area.center().x() - size.width() / 2, area.center().y() - size.height() / 2,
-                      size.width(), size.height())
+        width, height = self.picture_size(self.size_mm)
+        area = QRectF(rect.left() + 10, rect.top() + 10, rect.width() - 20, self.PICTURE_H)
+        page = QRectF(area.center().x() - width / 2, area.center().y() - height / 2, width, height)
         paint_page(p, page, self.kind, self.skipped, self.picture)
         if self.done and not self.skipped:
             badge = QRectF(page.right() - 9, page.top() - 7, 16, 16)
@@ -699,11 +718,11 @@ class PageTile(HoverButton):
         label_font.setStrikeOut(self.skipped)
         p.setFont(label_font)
         p.setPen(QColor(c.text))
-        p.drawText(QRectF(rect.left(), rect.top() + 76, rect.width(), 18), Qt.AlignmentFlag.AlignCenter,
+        p.drawText(QRectF(rect.left(), area.bottom() + 8, rect.width(), 18), Qt.AlignmentFlag.AlignCenter,
                    self.label_text)
         p.setFont(font(8.5, self.done))
         p.setPen(QColor(c.ok if self.done and not self.skipped else c.muted))
-        p.drawText(QRectF(rect.left() + 4, rect.top() + 94, rect.width() - 8, 30),
+        p.drawText(QRectF(rect.left() + 4, area.bottom() + 28, rect.width() - 8, 30),
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
                    self.dest)
         p.setOpacity(1.0)

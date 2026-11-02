@@ -21,6 +21,7 @@ from sprint.ui import theme  # noqa: E402
 from sprint.ui import controller as controller_module  # noqa: E402
 from sprint.ui.controller import Controller, Services  # noqa: E402
 from sprint.ui.main_window import MainWindow  # noqa: E402
+from sprint.ui.widgets import PageTile  # noqa: E402
 from sprint.ui.widgets import FocusVisible  # noqa: E402
 
 A4 = (210, 297)
@@ -111,6 +112,8 @@ def test_files_and_destinations(qtbot, window, project):
     assert window.plot.summary.text() == "4 pages · needs rolls 420, 610 and 914 mm"
     assert window.roll_chips[610].isChecked() and window.roll_chips[610].sub == "2 p."
     assert window.roll_chips[297].sub == "none"
+    # rolls no page needs are grey and cannot be picked
+    assert [w for w, chip in window.roll_chips.items() if chip.isEnabled()] == [420, 610, 914]
     assert window.roll_info.text().startswith("Roll 610 mm: 2 pages · ≈ 1.7 m of paper")
     assert window.roll_later.text() == "Then still needed: 420 and 914 mm"
     assert window.a4.print_button.text() == "Print 14 pages"
@@ -155,6 +158,14 @@ def test_roll_by_roll(qtbot, window, project, services):
     qtbot.waitUntil(lambda: window.plot.action.currentIndex() == 0)
     assert window.plot.summary.text() == "4 pages · all plotted ✓"
     assert window.plot.print_button.text() == "Roll 914 is done"
+
+
+def test_the_roll_in_the_plotter_is_greyed_out_when_no_page_needs_it(qtbot, window, project):
+    window.c.set_roll(297)
+    load(qtbot, window, [project[1]])            # A4 pages only: no roll is needed
+    chip = window.roll_chips[297]
+    assert chip.isChecked() and not chip.isEnabled() and chip.empty
+    assert window.plot.print_button.text() == "Plot" and not window.plot.print_button.isEnabled()
 
 
 def test_a_second_print_waits_its_turn(qtbot, window, project, services):
@@ -208,10 +219,12 @@ def test_a_page_that_cannot_be_drawn_is_not_tried_again(qtbot, window, project, 
     monkeypatch.setattr(controller_module, "render_preview", cannot_draw)
     load(qtbot, window, [project[4]])
     qtbot.waitUntil(lambda: len(tries) > 0, timeout=5000)
+    qtbot.wait(300)                       # the pictures asked for ahead are tried once each
+    settled = len(tries)
     for _ in range(3):
-        qtbot.wait(100)
         window.refresh()
-    assert len(tries) == 1
+        qtbot.wait(100)
+    assert len(tries) == settled
 
 
 def test_plots_longer_than_windows_allows_are_flagged(qtbot, window, make_pdf):
@@ -295,6 +308,24 @@ def test_files_show_their_first_page_without_a_click(qtbot, window, project):
     assert not any(row.pages.is_open for row in rows)
     shape = rows[0].header.shape
     assert max(shape.picture.width(), shape.picture.height()) == shape.picture_px()   # drawn 1:1
+
+
+def test_page_pictures_are_ready_before_a_file_is_opened(qtbot, window, project):
+    load(qtbot, window, [project[1]])
+    entry = window.c.entries[0]
+    row = window.rows[id(entry)]
+    wanted = [(entry.path, page.index, PageTile.picture_px_for((page.width_mm, page.height_mm),
+                                                                row.devicePixelRatioF())) for page in entry.doc.pages]
+    qtbot.waitUntil(lambda: all(key in window.c.previews for key in wanted), timeout=10000)
+    qtbot.mouseClick(row.header, Qt.MouseButton.LeftButton)
+    assert len(row.tiles) == 12 and all(tile.picture is not None for tile in row.tiles)
+
+
+def test_a_files_own_picture_has_no_large_preview(qtbot, window, project):
+    load(qtbot, window, [project[0]])
+    shape = window.rows[id(window.c.entries[0])].header.shape
+    assert not hasattr(shape, "peek_target")
+    assert shape.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 
 def test_resting_on_a_page_shows_it_large(qtbot, window, project):
