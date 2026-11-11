@@ -226,12 +226,12 @@ def test_settings_from_an_older_driver_get_a_buffer_of_the_size_it_writes(fake, 
     assert dm.DriverExtra == 512 and dm.PaperLength == 8410
 
 
-def test_place_page_real_size_centred():
-    # A4 page on A4 paper at 600 dpi with 4.2 mm margins: fits after shrinking a little
+def test_place_page_real_size_on_paper_with_margins():
+    # A4 page with ink up to its edges on A4 paper, 600 dpi, 4.2 mm margins: 1:1, the margins are cut off
     x, y, w, h, rotate = place_page((210, 297), (4960, 7016), (100, 100), (4760, 6816), (600, 600))
     assert rotate == 0
-    assert (w, h) == (4760, 6732)                 # shrunk to the printable width
-    assert (x, y) == (0, 42)                      # centred on the sheet
+    assert (w, h) == (mm_px(210, 600), mm_px(297, 600))   # not shrunk
+    assert (x, y) == (-101, -100)                 # centred on the sheet, edges outside the margins
 
 
 def test_place_page_rotates_landscape_onto_portrait_roll():
@@ -239,16 +239,17 @@ def test_place_page_rotates_landscape_onto_portrait_roll():
     sheet, offset, area = (7205, 9933), (59, 59), (7087, 9815)
     x, y, w, h, rotate = place_page((841, 594), sheet, offset, area, (300, 300))
     assert rotate == 1
-    assert h == 9815                              # long side fills the printable length
-    assert w == round(594 / 25.4 * 300 * 9815 / (841 / 25.4 * 300))   # same scale across
-    assert x == (sheet[0] - w) // 2 - offset[0] and y == 0
+    assert (w, h) == (mm_px(594, 300), mm_px(841, 300))   # 1:1 though longer than the printable area
+    assert x == (sheet[0] - w) // 2 - offset[0]
+    assert y == -offset[1]                        # 5 mm cut off at the top and at the bottom
 
 
 def test_place_page_real_size_when_paper_has_room():
-    # the same drawing on roll paper made 10 mm longer for the margins prints 1:1
+    # the same drawing on roll paper made 10 mm longer for the margins prints whole
     sheet, offset, area = (7205, 10051), (59, 59), (7087, 9933)
     x, y, w, h, rotate = place_page((841, 594), sheet, offset, area, (300, 300))
-    assert (w, h) == (round(594 / 25.4 * 300), round(841 / 25.4 * 300))
+    assert (w, h) == (mm_px(594, 300), mm_px(841, 300))
+    assert 0 <= x and x + w <= area[0] and 0 <= y and y + h <= area[1]
 
 
 def test_place_page_with_different_resolution_across_and_down():
@@ -265,13 +266,12 @@ def mm_px(mm, dpi):
 def test_place_page_drawing_keeps_its_scale_when_only_margin_is_cut():
     # A2 drawing (frame 10 mm in) on the 420 roll, 5 mm unprintable edge: real size, centred
     sheet = (mm_px(420, 300), mm_px(604, 300))               # paper made longer for the margins
-    x, y, w, h, rotate = place_page((420, 594), sheet, (59, 59), (sheet[0] - 118, sheet[1] - 118),
-                                    (300, 300), blank_mm=(10, 10, 10, 10))
+    area = (sheet[0] - 118, sheet[1] - 118)
+    x, y, w, h, rotate = place_page((420, 594), sheet, (59, 59), area, (300, 300), blank_mm=(10, 10, 10, 10))
     assert (w, h) == (mm_px(420, 300), mm_px(594, 300)) and rotate == 0
     assert (x, y) == (-59, 0)                                # 5 mm of empty margin outside on each side
-    # with ink up to the edge it is shrunk as before
-    x, y, w, h, rotate = place_page((420, 594), sheet, (59, 59), (sheet[0] - 118, sheet[1] - 118), (300, 300))
-    assert w == sheet[0] - 118 and h < mm_px(594, 300)
+    # with ink up to the edge it keeps its scale too: the edges are cut off
+    assert place_page((420, 594), sheet, (59, 59), area, (300, 300)) == (-59, 0, w, h, 0)
 
 
 def test_place_page_empty_margin_turns_with_the_page():
@@ -284,15 +284,29 @@ def test_place_page_empty_margin_turns_with_the_page():
     assert x == (sheet[0] - w) // 2 - offset[0]
 
 
-def test_place_page_shrinks_only_as_much_as_the_ink_needs():
+def test_place_page_never_shrinks_a_drawing_with_ink_near_the_edge():
     # A3 drawing whose frame is 2 mm from the edge, on A3 paper with 4.2 mm edges at 600 dpi
     sheet = (mm_px(297, 600), mm_px(420, 600))
     edge = mm_px(4.2, 600)
     area = (sheet[0] - 2 * edge, sheet[1] - 2 * edge)
     x, y, w, h, rotate = place_page((297, 420), sheet, (edge, edge), area, (600, 600), blank_mm=(2, 2, 2, 2))
-    ink = 293 / 25.4 * 600
-    assert abs(w / mm_px(297, 600) - area[0] / ink) < 0.001   # 98.5 %, not 97.2 %
-    assert abs(x + 2 / 25.4 * 600 * w / mm_px(297, 600)) <= 1  # the frame starts at the printable edge
+    assert (w, h) == sheet                        # 1:1: the frame lines fall into the margins
+    assert (x, y) == (-edge, -edge)               # still on the paper's edges, cut evenly
+
+
+def test_place_page_wider_than_the_paper():
+    # 1 px = 1 mm: a 950 mm wide page on 914 mm roll paper with 5 mm edges
+    assert place_page((950, 1200), (914, 1210), (5, 5), (904, 1200), (25.4, 25.4)) == (-23, 0, 950, 1200, 0)
+
+
+def test_place_page_uneven_margins_cut_no_more_than_needed():
+    mm = (25.4, 25.4)
+    # no margin on the left, 100 mm on the right: covers the printable area, 50 mm cut on the right only
+    assert place_page((950, 500), (1000, 600), (0, 0), (900, 600), mm)[:2] == (0, 50)
+    # 60 mm empty on the left only: moved left so the 50 mm cut lands on that empty margin
+    assert place_page((950, 500), (1000, 600), (0, 0), (900, 600), mm, blank_mm=(60, 0, 0, 0))[:2] == (-50, 50)
+    # fits the printable area: moved into it rather than cut
+    assert place_page((700, 500), (1000, 600), (200, 0), (750, 600), mm)[:2] == (0, 50)
 
 
 def test_place_page_small_page_not_enlarged():
@@ -353,12 +367,13 @@ def test_sumatra_command_line(monkeypatch):
     assert backend.print_file("Office", "C:/a.pdf", 1, "A4", duplex=True)
     assert backend.print_file("Office", "C:/a.pdf", 1, duplex=False)
     assert calls == [
-        ["SumatraPDF.exe", "-print-to", "HP DesignJet", "-silent", "-print-settings", "3x", "C:/a b.pdf"],
-        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "paper=A3", "C:/a.pdf"],
-        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "2x,paper=A4", "C:/a.pdf"],
-        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "C:/a.pdf"],
-        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "paper=A4,duplexlong", "C:/a.pdf"],
-        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "simplex", "C:/a.pdf"],
+        ["SumatraPDF.exe", "-print-to", "HP DesignJet", "-silent", "-print-settings", "noscale,3x", "C:/a b.pdf"],
+        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "noscale,paper=A3", "C:/a.pdf"],
+        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "noscale,2x,paper=A4", "C:/a.pdf"],
+        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "noscale", "C:/a.pdf"],
+        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "noscale,paper=A4,duplexlong",
+         "C:/a.pdf"],
+        ["SumatraPDF.exe", "-print-to", "Office", "-silent", "-print-settings", "noscale,simplex", "C:/a.pdf"],
     ]
     Result.returncode = 1
     with pytest.raises(printing.PrintError):

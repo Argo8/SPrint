@@ -46,7 +46,7 @@ time, so its pages are plotted roll by roll:
 
 Printed pages are marked done, so printing again sends only what is left (*Print again* / *Plot again* resend a part).
 On the plotter each page is printed on paper of *roll width × page length* (a few millimetres longer if the plotter
-needs room for its margins, so drawings print at 1:1). The paper size travels with each print job, so the plotter's
+needs room for its margins, so nothing is cut off at the ends). The paper size travels with each print job, so the plotter's
 own settings are never changed. SPrint remembers which roll is in the plotter.
 
 ## Features
@@ -63,9 +63,10 @@ own settings are never changed. SPrint remembers which roll is in the plotter.
 - Number of copies (collated)
 - Prints by itself with the built-in PDF renderer (PDFium, the engine of Google Chrome), always as the PDF is —
   no Adobe Reader needed
-- Pages print at their real size, so drawings keep their scale, as long as the edge the printer cannot reach holds only
-  empty margin (a drawing frame 5 mm in is enough); a page with ink up to the edge is shrunk just enough to fit,
-  and nothing is ever enlarged. Landscape pages are turned to fit the paper
+- Pages always print at their real size (1:1), so drawings keep their scale: nothing is ever shrunk or enlarged.
+  What falls into the edge the printer cannot reach is cut off (e.g. a few millimetres at both sides of a page as
+  wide as the roll); where the page has empty margin, it is moved a little so the cut lands there. Landscape pages
+  are turned to fit the paper
 - Only the needed pages of a file are printed; CAD layer visibility is kept
 - Printing runs in the background; the window shows progress per printer
 - English / Croatian interface
@@ -90,6 +91,7 @@ program = sumatra
 `sumatra` uses [SumatraPDF](https://www.sumatrapdfreader.org/) (installed, or `SumatraPDF.exe` next to `SPrint.exe`),
 `adobe` uses Adobe Acrobat / Acrobat Reader. The plotter always prints directly, because neither program can set a
 custom paper length (SumatraPDF 3.6 ignores it, Adobe Reader takes it only from the printer's default settings).
+SumatraPDF is told to print at real size as well; Adobe Reader's page scaling cannot be set from outside.
 
 ## From source
 
@@ -118,17 +120,17 @@ pyinstaller SPrint.spec
 That gives the program folder `dist\SPrint\`. Then, with [Inno Setup 6.5+](https://jrsoftware.org/isinfo.php):
 
 ```bash
-iscc /DAppVersion=2.1.1 installer\SPrint.iss
+iscc /DAppVersion=2.1.2 installer\SPrint.iss
 ```
 
-which writes `dist\SPrint-Setup-2.1.1.exe`. For Croatian installer texts put Inno Setup's unofficial
+which writes `dist\SPrint-Setup-2.1.2.exe`. For Croatian installer texts put Inno Setup's unofficial
 [`Croatian.isl`](https://jrsoftware.org/files/istrans/) into `installer\` first.
 
 GitHub Actions does all of this on every push: it runs the tests on Windows, builds the installer, installs it,
 starts SPrint, uninstalls it and keeps the installer and the portable zip as artifacts.
 
 To publish a release, raise `__version__` in `sprint/__init__.py`. Then either open *Actions → Build → Run
-workflow* on GitHub, tick *Publish a release* and run it, or push a matching tag such as `v2.1.1` (the build
+workflow* on GitHub, tick *Publish a release* and run it, or push a matching tag such as `v2.1.2` (the build
 stops if the tag differs). The release gets the installer and the portable zip once the build passes; the text
 on the release page comes from `.github/release-notes.md`.
 
@@ -230,7 +232,7 @@ Klik na gumb druge kartice dok jedna ispisuje stavlja je u red. U ploteru je jed
 
 Ispisane stranice označe se kao gotove, pa ponovni ispis šalje samo ono što je ostalo (*Ispiši ponovno* / *Plotaj
 ponovno* šalju dio opet). Na ploteru se svaka stranica ispisuje na papir *širina role × dužina stranice* (nekoliko
-milimetara dulji ako ploteru treba mjesta za margine, tako da se crteži ispisuju u mjerilu 1:1). Veličina papira
+milimetara dulji ako ploteru treba mjesta za margine, tako da se na krajevima ništa ne odreže). Veličina papira
 putuje sa svakim poslom ispisa, pa se postavke samog plotera nikad ne mijenjaju. SPrint pamti koja je rola u ploteru.
 
 ## Značajke
@@ -247,9 +249,10 @@ putuje sa svakim poslom ispisa, pa se postavke samog plotera nikad ne mijenjaju.
 - Broj kopija (složene)
 - Ispisuje sam, ugrađenim PDF prikazom (PDFium, pogon Google Chromea), uvijek onako kako je u PDF-u —
   Adobe Reader nije potreban
-- Stranice se ispisuju u stvarnoj veličini, pa crteži zadržavaju mjerilo, kad god je na rubu koji pisač ne može
-  ispisati samo prazna margina (dovoljan je okvir crteža 5 mm od ruba); stranica s crtežom do samog ruba smanji se
-  točno toliko da stane, a ništa se ne povećava. Položene stranice okreću se prema papiru
+- Stranice se uvijek ispisuju u stvarnoj veličini (1:1), pa crteži zadržavaju mjerilo: ništa se ne smanjuje ni
+  povećava. Ono što padne na rub koji pisač ne može ispisati se odreže (npr. nekoliko milimetara sa svake strane
+  stranice široke kao rola); ako stranica ima praznu marginu, malo se pomakne da se odreže baš ona. Položene stranice
+  okreću se prema papiru
 - Ispisuju se samo potrebne stranice datoteke; vidljivost CAD slojeva ostaje očuvana
 - Ispis radi u pozadini; prozor pokazuje napredak za svaki pisač
 - Sučelje na hrvatskom / engleskom
@@ -274,6 +277,7 @@ program = sumatra
 `sumatra` koristi [SumatraPDF](https://www.sumatrapdfreader.org/) (instaliran ili `SumatraPDF.exe` pokraj `SPrint.exe`),
 `adobe` koristi Adobe Acrobat / Acrobat Reader. Ploter uvijek ispisuje izravno jer nijedan od tih programa ne može zadati
 proizvoljnu dužinu papira (SumatraPDF 3.6 je zanemaruje, Adobe Reader je uzima samo iz zadanih postavki printera).
+SumatraPDF također ispisuje u stvarnoj veličini; mjerilo ispisa u Adobe Readeru ne može se zadati izvana.
 
 ## Iz izvornog koda
 
@@ -302,17 +306,17 @@ pyinstaller SPrint.spec
 To daje mapu programa `dist\SPrint\`. Zatim, uz [Inno Setup 6.5+](https://jrsoftware.org/isinfo.php):
 
 ```bash
-iscc /DAppVersion=2.1.1 installer\SPrint.iss
+iscc /DAppVersion=2.1.2 installer\SPrint.iss
 ```
 
-što stvara `dist\SPrint-Setup-2.1.1.exe`. Za hrvatske tekstove instalacije prvo stavite neslužbeni
+što stvara `dist\SPrint-Setup-2.1.2.exe`. Za hrvatske tekstove instalacije prvo stavite neslužbeni
 [`Croatian.isl`](https://jrsoftware.org/files/istrans/) iz Inno Setupa u `installer\`.
 
 GitHub Actions sve to radi pri svakom pushu: pokreće testove na Windowsima, izrađuje instalaciju, instalira je,
 pokreće SPrint, deinstalira ga i čuva instalaciju i prijenosni zip kao artefakte.
 
 Za objavu nove verzije povećajte `__version__` u `sprint/__init__.py`. Zatim na GitHubu otvorite *Actions →
-Build → Run workflow*, označite *Publish a release* i pokrenite, ili pushajte isti tag, npr. `v2.1.1` (build
+Build → Run workflow*, označite *Publish a release* i pokrenite, ili pushajte isti tag, npr. `v2.1.2` (build
 staje ako se tag razlikuje). Release dobiva instalaciju i prijenosni zip kad build prođe; tekst stranice
 releasea nalazi se u `.github/release-notes.md`.
 

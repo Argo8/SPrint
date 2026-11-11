@@ -352,10 +352,11 @@ def place_page(size_mm, sheet_px, offset_px, printable_px, dpi,
     relative to the printable area as GDI expects.
 
     The page is turned a quarter if its orientation differs from the sheet's and
-    centred on the sheet. It prints at its real size when the edge the printer
-    cannot reach holds only empty margin (``blank_mm``: left, top, right, bottom of
-    the page as shown), so drawings keep their scale; otherwise it is shrunk just
-    enough for its ink to fit. It is never enlarged.
+    always printed at its real size (1:1), so drawings keep their scale: it is never
+    shrunk or enlarged. It is centred on the sheet and moved as little as needed to
+    keep its ink (``blank_mm``: empty margin at the left, top, right, bottom of the
+    page as shown) inside the printable area. Ink the printer cannot reach even so
+    is cut off.
     """
     w_mm, h_mm = size_mm
     left, top, right, bottom = blank_mm
@@ -366,25 +367,22 @@ def place_page(size_mm, sheet_px, offset_px, printable_px, dpi,
         w_mm, h_mm, rotate = h_mm, w_mm, 1          # 1 = 90° clockwise
         left, top, right, bottom = bottom, left, top, right   # the left edge goes to the top
     per_mm_x, per_mm_y = dpi[0] / 25.4, dpi[1] / 25.4
-    width, height = w_mm * per_mm_x, h_mm * per_mm_y
-    ink_w = max(1.0, width - (left + right) * per_mm_x)
-    ink_h = max(1.0, height - (top + bottom) * per_mm_y)
-    scale = min(1.0, printable_px[0] / ink_w, printable_px[1] / ink_h)
-    x, width = _along(sheet_w, width * scale, offset_px[0], printable_px[0],
-                      left * per_mm_x * scale, right * per_mm_x * scale)
-    y, height = _along(sheet_h, height * scale, offset_px[1], printable_px[1],
-                       top * per_mm_y * scale, bottom * per_mm_y * scale)
+    width, height = round(w_mm * per_mm_x), round(h_mm * per_mm_y)
+    x = _along(sheet_w, width, offset_px[0], printable_px[0], left * per_mm_x, right * per_mm_x)
+    y = _along(sheet_h, height, offset_px[1], printable_px[1], top * per_mm_y, bottom * per_mm_y)
     return x, y, width, height, rotate
 
 
-def _along(sheet: int, size: float, offset: int, printable: int, blank_before: float,
-           blank_after: float) -> tuple[int, int]:
-    """Start (relative to the printable area) and length of the page along one axis:
-    centred on the sheet, moved as little as needed to keep its ink printable."""
-    before, after = math.floor(blank_before), math.floor(blank_after)
-    size = min(round(size), printable + before + after)   # rounding must not push ink out
+def _along(sheet: int, size: int, offset: int, printable: int, blank_before: float,
+           blank_after: float) -> int:
+    """Start of the page along one axis, relative to the printable area: centred on
+    the sheet, moved as little as needed to keep its ink printable. When the ink is
+    longer than the printable area, it covers all of it, so no more is cut off than
+    must be."""
+    lowest = -math.floor(blank_before)                     # lower: ink cut at the start
+    highest = printable - size + math.floor(blank_after)   # higher: ink cut at the end
     start = (sheet - size) // 2 - offset
-    return max(-before, min(start, printable - size + after)), size
+    return max(min(lowest, highest), min(start, max(lowest, highest)))
 
 
 def blank_margins_mm(page) -> tuple[float, float, float, float]:
@@ -500,7 +498,7 @@ def _driver_copies(printer: str, copies: int, collate: bool) -> bool:
 
 def _room_for_margins(printer: str, paper: tuple, copies: int, devmode):
     """Make custom (roll) paper longer by the printer's top and bottom margins,
-    so a page as long as the paper still prints at its real size."""
+    so a page as long as the paper is printed whole (pages are never shrunk)."""
     hdc = win32gui.CreateDC("WINSPOOL", printer, devmode)
     try:
         (_, sheet_h), _, (_, printable_h), (_, dpi_y) = _sheet_metrics(hdc)
@@ -512,7 +510,7 @@ def _room_for_margins(printer: str, paper: tuple, copies: int, devmode):
     width, length = paper
     try:
         return job_settings(printer, (width, length + math.ceil(margins_mm)), copies)
-    except PrintError:   # longer than the driver allows: keep the length, the page shrinks a little
+    except PrintError:   # longer than the driver allows: keep the length, the margins cut a little off
         return devmode
 
 
@@ -531,17 +529,14 @@ class SumatraBackend(Backend):
         self.exe = exe
 
     def print_file(self, printer, path, copies=1, paper=None, duplex=None):
-        settings = []
+        settings = ["noscale"]   # real size like direct printing (SumatraPDF defaults to shrink)
         if copies > 1:
             settings.append(f"{copies}x")
         if paper in NAMED_PAPER_MM:   # SumatraPDF 3.6 knows no custom sizes
             settings.append(f"paper={paper}")
         if duplex is not None:
             settings.append("duplexlong" if duplex else "simplex")
-        args = [self.exe, "-print-to", printer, "-silent"]
-        if settings:
-            args += ["-print-settings", ",".join(settings)]
-        args.append(path)
+        args = [self.exe, "-print-to", printer, "-silent", "-print-settings", ",".join(settings), path]
         try:
             result = subprocess.run(args, creationflags=CREATE_NO_WINDOW,
                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
