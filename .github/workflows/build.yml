@@ -28,9 +28,19 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Libraries Qt needs without a desktop
+        # An Ubuntu package mirror outage must not block the build: without these
+        # libraries only the window tests are left out here (they run on Windows too).
+        continue-on-error: true
         run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
       - run: pip install -r requirements.txt pytest pytest-qt
-      - run: python -m pytest -q -rs
+      - name: Run tests
+        run: |
+          if python -c "import PySide6.QtWidgets"; then
+            python -m pytest -q -rs
+          else
+            echo "::warning::Qt cannot load (system libraries missing): window tests left out on Linux, they run on Windows"
+            python -m pytest -q -rs -p no:pytest-qt --ignore=tests/test_ui.py
+          fi
 
   windows:
     name: Tests and SPrint.exe (Windows)
