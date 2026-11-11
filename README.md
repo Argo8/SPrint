@@ -36,8 +36,12 @@ Sizes within 3 mm of A4/A3 count as A4/A3 (scanners and PDF printers rarely prod
 The visible page area is used (crop box, `/Rotate`, `/UserUnit`), i.e. what a PDF viewer shows and prints.
 
 For the plotter you choose the roll that is loaded. SPrint groups that roll's pages by length and prints each group
-on paper of *roll width × page length* (a few millimetres longer if the plotter needs room for its margins, so drawings
-print at 1:1). The paper size travels with each print job, so the plotter's own settings are never changed.
+on paper of *roll width × page length* (a few millimetres longer if the plotter needs room for its margins, so nothing
+is cut off at the ends). The paper size travels with each print job, so the plotter's own settings are never changed.
+
+Every page is printed at its real size (1:1), so drawings keep their scale. Pages are never shrunk to fit: whatever
+falls into the margins the printer cannot print on is cut off instead (e.g. a few millimetres at both sides of a page
+as wide as the roll).
 
 ## Features
 
@@ -47,7 +51,7 @@ print at 1:1). The paper size travels with each print job, so the plotter's own 
 - Automatic paper length on the plotter, printed groups marked with ✓
 - Number of copies (plotter copies are collated per paper length)
 - Prints by itself with the built-in PDF renderer (PDFium, the engine of Google Chrome) — no Adobe Reader needed
-- Landscape pages are turned to fit the paper; pages larger than the printable area are shrunk, smaller ones are not enlarged
+- Always 1:1: landscape pages are turned to fit the paper, no page is shrunk or enlarged
 - Only the needed pages of a file are printed; CAD layer visibility is kept
 - Printing runs in the background — the window never freezes and can show progress; closing while printing
   stops after the current file
@@ -71,6 +75,7 @@ program = sumatra
 `sumatra` uses [SumatraPDF](https://www.sumatrapdfreader.org/) (installed, or `SumatraPDF.exe` next to `SPrint.exe`),
 `adobe` uses Adobe Acrobat / Acrobat Reader. The plotter always prints directly, because neither program can set a
 custom paper length (SumatraPDF 3.6 ignores it, Adobe Reader takes it only from the printer's default settings).
+SumatraPDF is told to print at real size as well; Adobe Reader's page scaling cannot be set from outside.
 
 ## From source
 
@@ -196,8 +201,12 @@ Veličine do 3 mm odstupanja od A4/A3 smatraju se A4/A3 (skeneri i PDF printeri 
 Koristi se vidljivi dio stranice (crop box, `/Rotate`, `/UserUnit`), tj. ono što PDF preglednik prikazuje i ispisuje.
 
 Za ploter odaberete rolu koja je umetnuta. SPrint grupira stranice te role po dužini i svaku grupu ispisuje na papir
-*širina role × dužina stranice* (nekoliko milimetara dulji ako ploteru treba mjesta za margine, tako da se crteži ispisuju
-u mjerilu 1:1). Veličina papira putuje sa svakim poslom ispisa, pa se postavke samog plotera nikad ne mijenjaju.
+*širina role × dužina stranice* (nekoliko milimetara dulji ako ploteru treba mjesta za margine, tako da se na krajevima
+ništa ne odreže). Veličina papira putuje sa svakim poslom ispisa, pa se postavke samog plotera nikad ne mijenjaju.
+
+Svaka stranica ispisuje se u stvarnoj veličini (1:1), pa crteži ostaju u mjerilu. Stranice se nikad ne smanjuju da bi
+stale: ono što padne u margine koje printer ne može ispisati se odreže (npr. nekoliko milimetara sa svake strane
+stranice široke kao rola).
 
 ## Značajke
 
@@ -207,7 +216,7 @@ u mjerilu 1:1). Veličina papira putuje sa svakim poslom ispisa, pa se postavke 
 - Automatska dužina papira na ploteru, isplotane grupe označene s ✓
 - Broj kopija (kopije na ploteru slažu se po dužini papira)
 - Ispisuje sam, ugrađenim PDF prikazom (PDFium, pogon Google Chromea) — Adobe Reader nije potreban
-- Položene stranice okreću se prema papiru; stranice veće od područja ispisa se smanjuju, manje se ne povećavaju
+- Uvijek 1:1: položene stranice okreću se prema papiru, nijedna se stranica ne smanjuje ni povećava
 - Ispisuju se samo potrebne stranice datoteke; vidljivost CAD slojeva ostaje očuvana
 - Ispis radi u pozadini — prozor se ne zamrzava i prikazuje napredak; zatvaranje tijekom ispisa
   zaustavlja ispis nakon trenutne datoteke
@@ -231,6 +240,7 @@ program = sumatra
 `sumatra` koristi [SumatraPDF](https://www.sumatrapdfreader.org/) (instaliran ili `SumatraPDF.exe` pokraj `SPrint.exe`),
 `adobe` koristi Adobe Acrobat / Acrobat Reader. Ploter uvijek ispisuje izravno jer nijedan od tih programa ne može zadati
 proizvoljnu dužinu papira (SumatraPDF 3.6 je zanemaruje, Adobe Reader je uzima samo iz zadanih postavki printera).
+SumatraPDF također ispisuje u stvarnoj veličini; mjerilo ispisa u Adobe Readeru ne može se zadati izvana.
 
 ## Iz izvornog koda
 

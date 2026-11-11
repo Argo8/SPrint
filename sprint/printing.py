@@ -181,24 +181,28 @@ def place_page(size_mm, sheet_px, offset_px, printable_px, dpi) -> tuple[int, in
     """Where to draw a page on the sheet: (x, y, width, height, rotate) in device pixels,
     relative to the printable area as GDI expects.
 
-    The page is turned a quarter if its orientation differs from the sheet's,
-    printed at its real size unless that exceeds the printable area (then it is
-    shrunk to fit), and centred on the sheet.
+    The page is turned a quarter if its orientation differs from the sheet's and
+    always printed at its real size (1:1), centred on the sheet, so drawings keep
+    their scale. What lies outside the printable area (the printer's margins) is
+    cut off rather than the page being shrunk.
     """
     w_mm, h_mm = size_mm
     sheet_w, sheet_h = sheet_px
     rotate = 0
     if (w_mm > h_mm and sheet_w < sheet_h) or (w_mm < h_mm and sheet_w > sheet_h):
         w_mm, h_mm, rotate = h_mm, w_mm, 1          # 1 = 90° clockwise
-    width, height = w_mm / 25.4 * dpi[0], h_mm / 25.4 * dpi[1]
-    scale = min(1.0, printable_px[0] / width, printable_px[1] / height)
-    width = min(round(width * scale), printable_px[0])
-    height = min(round(height * scale), printable_px[1])
-    x = (sheet_w - width) // 2 - offset_px[0]
-    y = (sheet_h - height) // 2 - offset_px[1]
-    x = max(0, min(x, printable_px[0] - width))
-    y = max(0, min(y, printable_px[1] - height))
+    width, height = round(w_mm / 25.4 * dpi[0]), round(h_mm / 25.4 * dpi[1])
+    x = _position((sheet_w - width) // 2 - offset_px[0], width, printable_px[0])
+    y = _position((sheet_h - height) // 2 - offset_px[1], height, printable_px[1])
     return x, y, width, height, rotate
+
+
+def _position(centred: int, size: int, printable: int) -> int:
+    """Start of a page along one axis of the printable area, as close to ``centred``
+    as possible: a page that fits stays inside the printable area (uneven margins),
+    a larger one covers all of it, so no more is cut off than must be."""
+    room = printable - size
+    return max(min(0, room), min(centred, max(0, room)))
 
 
 # ── PDF print programs ───────────────────────────────────────────────────────
@@ -283,7 +287,7 @@ def _driver_copies(printer: str, copies: int, collate: bool) -> bool:
 
 def _room_for_margins(printer: str, paper: tuple, copies: int, devmode):
     """Make custom (roll) paper longer by the printer's top and bottom margins,
-    so a page as long as the paper still prints at its real size."""
+    so a page as long as the paper is printed whole (pages are never shrunk)."""
     hdc = win32gui.CreateDC("WINSPOOL", printer, devmode)
     try:
         (_, sheet_h), _, (_, printable_h), (_, dpi_y) = _sheet_metrics(hdc)
@@ -295,7 +299,7 @@ def _room_for_margins(printer: str, paper: tuple, copies: int, devmode):
     width, length = paper
     try:
         return job_settings(printer, (width, length + math.ceil(margins_mm)), copies)
-    except PrintError:   # longer than the driver allows: keep the length, the page shrinks a little
+    except PrintError:   # longer than the driver allows: keep the length, the margins cut a little off
         return devmode
 
 
@@ -314,15 +318,13 @@ class SumatraBackend(Backend):
         self.exe = exe
 
     def print_file(self, printer, path, copies=1, paper=None):
-        settings = []
+        settings = ["noscale"]   # real size like direct printing (SumatraPDF defaults to shrink)
         if copies > 1:
             settings.append(f"{copies}x")
         if paper in NAMED_PAPER_MM:   # SumatraPDF 3.6 knows no custom sizes
             settings.append(f"paper={paper}")
-        args = [self.exe, "-print-to", printer, "-silent"]
-        if settings:
-            args += ["-print-settings", ",".join(settings)]
-        args.append(path)
+        args = [self.exe, "-print-to", printer, "-silent",
+                "-print-settings", ",".join(settings), path]
         try:
             result = subprocess.run(args, creationflags=CREATE_NO_WINDOW,
                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
