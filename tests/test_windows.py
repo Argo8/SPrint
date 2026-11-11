@@ -9,17 +9,19 @@ the job used and where the page landed on it.
 import os
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 from pypdf.generic import DecodedStreamObject, NameObject
 
-from conftest import MM
+from conftest import MM, add_signature
 from sprint import printing
 from sprint.pdfdocs import read_document
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="needs Windows")
 
 if sys.platform == "win32":
+    import pywintypes
     import win32print
 
 BUILTIN_PRINTER = "Microsoft Print to PDF"
@@ -55,6 +57,75 @@ def test_job_settings_leave_the_printer_alone(builtin_printer):
     with pytest.raises(printing.PrintError):   # this driver has no custom sizes
         printing.job_settings(builtin_printer, (610, 1234))
     assert printer_paper(builtin_printer) == before
+
+
+def test_job_settings_use_this_users_printing_preferences(builtin_printer):
+    """What the printer's settings dialog (the ⚙ button) changes reaches SPrint's jobs."""
+    handle = win32print.OpenPrinter(builtin_printer, {"DesiredAccess": win32print.PRINTER_ACCESS_USE})
+    try:
+        before = win32print.GetPrinter(handle, 9)["pDevMode"]
+        mine = win32print.GetPrinter(handle, 2)["pDevMode"]
+        landscape = 3 - mine.Orientation   # the other orientation
+        mine.Orientation = landscape
+        mine.Fields |= printing.DM_ORIENTATION
+        win32print.SetPrinter(handle, 9, {"pDevMode": mine}, 0)
+        try:
+            assert printing.job_settings(builtin_printer).Orientation == landscape
+        finally:
+            if before is not None:
+                win32print.SetPrinter(handle, 9, {"pDevMode": before}, 0)
+            else:
+                mine.Orientation = 3 - landscape
+                win32print.SetPrinter(handle, 9, {"pDevMode": mine}, 0)
+    finally:
+        win32print.ClosePrinter(handle)
+
+
+def older_settings(handle):
+    """The printer's settings without the driver's own part, as an older driver saved them."""
+    current = win32print.GetPrinter(handle, 2)["pDevMode"]
+    old = pywintypes.DEVMODEType(0)
+    for name in ("DeviceName", "SpecVersion", "DriverVersion", "Fields", "Orientation", "PaperSize",
+                 "Scale", "Copies", "DefaultSource", "PrintQuality", "Color", "Duplex", "YResolution",
+                 "TTOption", "Collate", "FormName"):
+        try:
+            setattr(old, name, getattr(current, name))
+        except (AttributeError, TypeError):
+            pass
+    return old
+
+
+def test_job_settings_with_settings_saved_by_an_older_driver(builtin_printer, monkeypatch):
+    """Settings smaller than what the driver writes now go into a buffer of its size.
+
+    (pywin32 reports DriverExtra from its own copy of the settings, which the
+    driver may change, so the test checks which buffer was made and used.)"""
+    handle = win32print.OpenPrinter(builtin_printer)
+    try:
+        needed = win32print.DocumentProperties(None, handle, builtin_printer, None, None, 0)
+    finally:
+        win32print.ClosePrinter(handle)
+    if needed <= pywintypes.DEVMODEType(0).Size:
+        pytest.skip("this driver keeps no settings of its own")
+    made, extras = [], []
+
+    def make(extra):
+        extras.append(extra)
+        made.append(pywintypes.DEVMODEType(extra))
+        return made[-1]
+    monkeypatch.setattr(printing, "pywintypes", SimpleNamespace(DEVMODEType=make))
+    monkeypatch.setattr(printing, "_user_settings", older_settings)
+    devmode = printing.job_settings(builtin_printer, "A3")
+    assert devmode.PaperSize == 8
+    assert len(made) == 1 and devmode is made[0]
+    assert extras == [needed - made[0].Size]      # the public part plus what the driver adds
+
+
+@needs_file_printer
+def test_printing_with_settings_saved_by_an_older_driver(make_pdf, monkeypatch):
+    monkeypatch.setattr(printing, "_user_settings", older_settings)
+    a4 = boxed_pdf(make_pdf, "a4.pdf", (210, 297))
+    assert print_and_inspect(printing.DirectBackend(), a4, paper="A4")[0] == (210, 297)
 
 
 def boxed_pdf(make_pdf, name, size_mm):
@@ -102,6 +173,13 @@ def test_direct_print_uses_the_requested_paper(make_pdf):
 
     a4 = boxed_pdf(make_pdf, "a4.pdf", (210, 297))
     assert print_and_inspect(backend, a4, paper="A4")[0] == (210, 297)
+
+
+@needs_file_printer
+def test_direct_print_includes_signatures_and_form_fields(make_pdf):
+    """A page whose only content is a visible signature must not come out blank."""
+    signed = make_pdf("signed.pdf", [(210, 297)], lambda index, page, writer: add_signature(page, writer))
+    print_and_inspect(printing.DirectBackend(), signed, paper="A4")
 
 
 @needs_file_printer

@@ -57,6 +57,11 @@ hr.SendToShortcut=Dodaj SPrint u izbornik „Pošalji u” (desni klik na PDF da
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "sendto"; Description: "{cm:SendToShortcut}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[InstallDelete]
+; The program files of an older version go first: a file this version no longer has would still be
+; loaded (2.0's Pillow folder broke 2.1). Settings live in %APPDATA%\SPrint and stay.
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
 Source: "..\dist\SPrint\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

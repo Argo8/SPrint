@@ -1,0 +1,1 @@
+"""The SPrint window (Qt)."""

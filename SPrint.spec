@@ -1,10 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Builds SPrint as a folder, dist/SPrint/ (SPrint.exe + its libraries).
 # installer/SPrint.iss turns that folder into SPrint-Setup-<version>.exe.
+import os
 import re
 import sys
-
-from PyInstaller.utils.hooks import collect_all
 
 with open('sprint/__init__.py', encoding='utf-8') as fh:
     version = re.search(r'__version__ = "([\d.]+)"', fh.read()).group(1)
@@ -32,25 +31,23 @@ if sys.platform == 'win32':   # version resource, shown in the file's Properties
         ],
     )
 
-datas = [('icon.ico', '.')]
-binaries = []
-hiddenimports = ['PIL._tkinter_finder']   # Pillow's Tk bridge, used by ttkbootstrap's images
-tmp_ret = collect_all('tkinterdnd2')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-
 a = Analysis(
     ['PRINT.py'],
     pathex=[],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
+    binaries=[],
+    datas=[('icon.ico', '.')],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['tkinter', 'PIL', 'numpy'],   # not used at run time (pypdfium2 imports PIL only on request)
     noarchive=False,
 )
+# The window draws with plain Qt widgets: no software OpenGL or shader compiler needed.
+UNUSED = ('opengl32sw', 'd3dcompiler', 'qt6quick', 'qt6qml', 'qt6pdf', 'qt6virtualkeyboard')
+a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).lower().startswith(UNUSED)]
+# Qt's own translations are not needed: every text, dialog buttons included, comes from sprint/i18n.py.
+a.datas = [d for d in a.datas if 'translations' not in d[0].replace('\\', '/').split('/')]
 pyz = PYZ(a.pure)
 
 exe = EXE(

@@ -27,7 +27,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install -r requirements.txt pytest
+      - name: Libraries Qt needs without a desktop
+        run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - run: pip install -r requirements.txt pytest pytest-qt
       - run: python -m pytest -q -rs
 
   windows:
@@ -40,7 +42,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest pyinstaller
+        run: pip install -r requirements.txt pytest pytest-qt pillow pyinstaller
 
       - name: Set up a printer that prints to a file, and SumatraPDF (optional program)
         shell: pwsh
@@ -91,14 +93,34 @@ jobs:
           if ($LASTEXITCODE) { throw "ISCC failed with $LASTEXITCODE" }
           "SPRINT_VERSION=$version" >> $env:GITHUB_ENV
 
-      - name: Install, start and uninstall SPrint
+      - name: Install over the latest release, start and uninstall SPrint
         shell: pwsh
         timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $setup = Start-Process "dist\SPrint-Setup-$env:SPRINT_VERSION.exe" -PassThru -Wait `
-            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/TASKS=sendto'
-          if ($setup.ExitCode -ne 0) { throw "setup exited with $($setup.ExitCode)" }
+          function Install-SPrint($setup) {
+            $run = Start-Process $setup -PassThru -Wait `
+              -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/TASKS=sendto'
+            if ($run.ExitCode -ne 0) { throw "$setup exited with $($run.ExitCode)" }
+          }
           $dir = "$env:LOCALAPPDATA\Programs\SPrint"
+          # Most people update: install the latest release first, then this version over it.
+          gh release download --repo $env:GITHUB_REPOSITORY --pattern 'SPrint-Setup-*.exe' --dir previous
+          if ($LASTEXITCODE -eq 0) {
+            $previous = Get-ChildItem previous -Filter 'SPrint-Setup-*.exe' | Select-Object -First 1
+            Install-SPrint $previous.FullName
+            "Installed $($previous.Name) first"
+          } else {
+            Write-Warning "no earlier release to update from"
+          }
+          $global:LASTEXITCODE = 0
+          Install-SPrint "dist\SPrint-Setup-$env:SPRINT_VERSION.exe"
+          # nothing of the earlier version may stay behind: Python would still load it
+          $built = Get-ChildItem dist\SPrint -Recurse -File | ForEach-Object { $_.FullName.Substring((Resolve-Path dist\SPrint).Path.Length) }
+          $left = Get-ChildItem $dir -Recurse -File | ForEach-Object { $_.FullName.Substring($dir.Length) } |
+            Where-Object { $_ -notin $built -and $_ -notlike '\unins*' }
+          if ($left) { throw "left over from the earlier version: $($left -join ', ')" }
           $shortcuts = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SPrint.lnk", "$env:APPDATA\Microsoft\Windows\SendTo\SPrint.lnk"
           foreach ($path in @("$dir\SPrint.exe") + $shortcuts) {
             if (-not (Test-Path $path)) { throw "not installed: $path" }
@@ -146,5 +168,8 @@ jobs:
           # a pushed tag already exists; from "Run workflow" the tag is created on this commit
           tag="v$(python3 -c 'import sprint; print(sprint.__version__)')"
           notes=$(sed "s/{version}/${tag#v}/g" .github/release-notes.md)
+          if [ -f ".github/changes/$tag.md" ]; then   # what is new in this version, above the downloads
+            notes="$(cat ".github/changes/$tag.md")"$'\n\n'"$notes"
+          fi
           gh release create "$tag" SPrint-Setup-*.exe SPrint-portable-*.zip --target "$GITHUB_SHA" \
             --repo "$GITHUB_REPOSITORY" --title "SPrint $tag" --notes "$notes" --generate-notes

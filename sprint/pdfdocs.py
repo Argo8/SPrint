@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 
 try:
     from pypdf import PdfReader, PdfWriter
@@ -15,6 +16,9 @@ except ImportError:  # older installs: PyPDF2 >= 3 has the same API for what is 
     from PyPDF2.generic import NameObject
 
 from .paper import PT_TO_MM, DocInfo, PageInfo
+
+#: PDFium is not thread-safe: printing and page previews take turns.
+PDFIUM_LOCK = threading.RLock()
 
 # Malformed PDFs make pypdf log a warning per oddity; they are harmless here.
 logging.getLogger("pypdf").setLevel(logging.ERROR)
@@ -131,3 +135,48 @@ def file_for_pages(doc: DocInfo, indices: list[int], temp_dir: str, label: str) 
     target = _unique_path(temp_dir, f"{stem} [{label}]", ".pdf")
     write_subset(doc.path, indices, target)
     return target
+
+
+FLAT_NORMALDISPLAY, FLAT_PRINT = 0, 1
+FLATTEN_SUCCESS = 1
+
+
+def load_flat_page(pdf, index: int, for_print: bool):
+    """Page ``index`` of a pypdfium2 document with its form fields and annotations
+    drawn into its content. PDFium leaves form fields (filled-in fields, visible
+    signatures) out when it draws a page; flattening keeps them. Only the copy in
+    memory changes, never the file."""
+    import pypdfium2.raw as pdfium_c
+
+    page = pdf[index]
+    if pdfium_c.FPDFPage_Flatten(page.raw, FLAT_PRINT if for_print else FLAT_NORMALDISPLAY) == FLATTEN_SUCCESS:
+        page.close()
+        page = pdf[index]   # load it again with its new content
+    return page
+
+
+def render_preview(path: str, page_index: int, max_px: int) -> tuple[int, int, bytes]:
+    """A small picture of one page: (width, height, RGBA bytes), the long side ``max_px``."""
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as pdfium_c
+
+    with PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(path)
+        try:
+            page = load_flat_page(pdf, page_index, for_print=False)
+            try:
+                scale = max_px / max(page.get_size())
+                bitmap = page.render(scale=scale, force_bitmap_format=pdfium_c.FPDFBitmap_BGRA,
+                                     rev_byteorder=True)
+                try:
+                    width, height, stride = bitmap.width, bitmap.height, bitmap.stride
+                    data = bytes(bitmap.buffer)
+                finally:
+                    bitmap.close()
+            finally:
+                page.close()
+        finally:
+            pdf.close()
+    if stride != width * 4:   # drop row padding
+        data = b"".join(data[row * stride:row * stride + width * 4] for row in range(height))
+    return width, height, data
